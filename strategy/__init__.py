@@ -15,11 +15,11 @@ from strategy.common.signal_engine import (
     store_signal,
 )
 from strategy.common.signal_generator import FinalSignal, generate_final_signal
-from strategy.nifty.nifty_options import generate_nifty_hybrid_signal, generate_nifty_options_signal
+from strategy.nifty.option_helper import generate_nifty_hybrid_signal, generate_nifty_options_signal
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 from strategy.strategy import LastClosedCandleStrategy
-from strategy.nifty.strategy_equity import generate_equity_signal
-from strategy.mcx.strategy_mcx import generate_mcx_signal
+from strategy.nifty.strategy import generate_equity_signal
+from strategy.mcx.strategy import generate_mcx_signal
 
 __all__ = [
     "BreakoutResult",
@@ -43,6 +43,9 @@ __all__ = [
     "store_market_data",
     "store_signal",
 ]
+
+
+
 
 
 

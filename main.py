@@ -26,10 +26,10 @@ from engine.trade_manager_mcx import manage_mcx_trade
 from engine.trade_manager_nifty import manage_nifty_trade
 from execution.order_manager import OrderManager
 from execution.trade_manager import ActiveTrade, TradeManager
-from strategy.nifty.equity_decision_engine import enrich_signal_with_premium
-from strategy.nifty.nifty_options import enrich_nifty_signal_with_premium
+from strategy.nifty.decision_engine import enrich_signal_with_premium
+from strategy.nifty.option_helper import enrich_nifty_signal_with_premium
 from strategy.common.indicators import calculate_ema
-from strategy.mcx.mcx_option_helper import enrich_mcx_signal_with_option
+from strategy.mcx.option_helper import enrich_mcx_signal_with_option
 from strategy.common.market_regime import MarketRegimeSnapshot, detect_market_regime
 from strategy.common.signal_engine import store_market_data, store_signal
 from strategy.strategy import LastClosedCandleStrategy, MINIMUM_INDICATOR_CANDLES
@@ -1379,6 +1379,9 @@ if __name__ == "__main__":
 
 
  
+
+
+
 
 
 
