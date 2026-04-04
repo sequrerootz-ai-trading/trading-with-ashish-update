@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from strategy.equity_decision_engine import build_equity_decision
-from strategy.signal_types import GeneratedSignal, SignalContext
+from strategy.nifty.equity_decision_engine import build_equity_decision
+from strategy.common.signal_types import GeneratedSignal, SignalContext
 
 
 def generate_equity_signal(
@@ -11,3 +11,5 @@ def generate_equity_signal(
 ) -> GeneratedSignal:
     _ = sentiment
     return build_equity_decision(symbol, data)
+
+

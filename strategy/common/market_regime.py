@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from data.candle_store import Candle
-from strategy.indicators import calculate_adx, calculate_atr, calculate_vwap, calculate_volume_average
+from strategy.common.indicators import calculate_adx, calculate_atr, calculate_vwap, calculate_volume_average
 
 
 @dataclass(frozen=True)
@@ -75,3 +75,4 @@ def detect_market_regime(
         avg_volume=avg_volume,
         volume_spike_ratio=volume_spike_ratio,
     )
+

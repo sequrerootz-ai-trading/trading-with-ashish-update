@@ -5,7 +5,7 @@ from typing import Callable
 
 from data.candle_store import Candle
 from data.option_premium import PremiumQuote
-from strategy.indicators import calculate_indicators, detect_trend
+from strategy.common.indicators import calculate_indicators, detect_trend
 
 
 @dataclass(frozen=True)
@@ -168,3 +168,4 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
+

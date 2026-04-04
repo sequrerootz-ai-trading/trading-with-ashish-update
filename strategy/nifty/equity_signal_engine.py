@@ -7,10 +7,10 @@ from datetime import UTC, datetime
 
 from data.candle_store import Candle
 from data.database import TradingDatabase
-from strategy.market_regime import detect_market_regime
-from strategy.nifty_options import generate_nifty_options_signal
-from strategy.signal_types import GeneratedSignal, SignalContext
-from strategy.strategy_equity import generate_equity_signal
+from strategy.common.market_regime import detect_market_regime
+from strategy.nifty.nifty_options import generate_nifty_options_signal
+from strategy.common.signal_types import GeneratedSignal, SignalContext
+from strategy.nifty.strategy_equity import generate_equity_signal
 
 logger = logging.getLogger(__name__)
 
@@ -547,3 +547,7 @@ def _coerce_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+
+

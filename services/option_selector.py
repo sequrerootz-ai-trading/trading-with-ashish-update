@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from execution.option_selector import get_current_weekly_expiry, round_to_nearest_strike
-from strategy.signal_types import OptionSuggestion
+from strategy.common.signal_types import OptionSuggestion
 
 
 STRIKE_OFFSETS = {

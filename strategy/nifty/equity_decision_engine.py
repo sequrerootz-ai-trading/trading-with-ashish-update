@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from data.option_premium import PremiumQuote
-from strategy.signal_types import (
+from strategy.common.signal_types import (
     GeneratedSignal,
     IndicatorDetails,
     OptionSuggestion,
@@ -29,7 +29,7 @@ def build_equity_decision(symbol: str, data: SignalContext) -> GeneratedSignal:
             confidence=0.0,
         )
 
-    from strategy.indicators import calculate_indicators, detect_trend
+    from strategy.common.indicators import calculate_indicators, detect_trend
 
     close_prices = [candle.close for candle in data.candles]
     indicators = calculate_indicators(close_prices)
@@ -582,3 +582,5 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
+
+

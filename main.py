@@ -14,26 +14,66 @@ from data.database import TradingDatabase
 from data.market_data import MarketDataService
 from data.mcx_option_chain import McxOptionChainService
 from data.option_premium import OptionPremiumService
+from engine.trade_utils import (
+    _handle_live_stop_loss_completion,
+    _safe_exit_position,
+    _trail_active_trade_if_needed,
+    _try_execute_entry_if_needed,
+)
+from filters.mcx_filters import _should_skip_trade as mcx_skip
+from filters.nifty_filters import _should_skip_trade as nifty_skip
+from engine.trade_manager_mcx import manage_mcx_trade
+from engine.trade_manager_nifty import manage_nifty_trade
 from execution.order_manager import OrderManager
 from execution.trade_manager import ActiveTrade, TradeManager
-from strategy.equity_decision_engine import enrich_signal_with_premium
-from strategy.nifty_options import enrich_nifty_signal_with_premium
-from strategy.indicators import calculate_ema
-from strategy.mcx_option_helper import enrich_mcx_signal_with_option
-from strategy.market_regime import MarketRegimeSnapshot, detect_market_regime
-from strategy.signal_engine import store_market_data, store_signal
+from strategy.nifty.equity_decision_engine import enrich_signal_with_premium
+from strategy.nifty.nifty_options import enrich_nifty_signal_with_premium
+from strategy.common.indicators import calculate_ema
+from strategy.mcx.mcx_option_helper import enrich_mcx_signal_with_option
+from strategy.common.market_regime import MarketRegimeSnapshot, detect_market_regime
+from strategy.common.signal_engine import store_market_data, store_signal
 from strategy.strategy import LastClosedCandleStrategy, MINIMUM_INDICATOR_CANDLES
+from utils.runtime_helpers import (
+    _fmt_rupee,
+    _format_pnl_pct,
+    _mode_color,
+    _mode_label,
+    _parse_time,
+    _print_blocked,
+    _print_order_error,
+    _print_partial_exit,
+    _print_skip,
+    _print_stop_loss_hit,
+    _print_time_exit,
+    _print_trade_running,
+    _print_trade_started,
+    _print_trade_waiting,
+    _print_trail_update,
+    _time_in_range,
+)
 
 # NEW: daily runtime controls and risk throttles
 DAILY_STATE = {
-    "date": None,
-    "daily_pnl": 0.0,
-    "peak_pnl": 0.0,
-    "completed_trades": 0,
-    "cooldown_candles": 0,
-    "consecutive_losses": 0,
-    "halted_for_day": False,
-    "last_trade_pnl": 0.0,
+    "EQUITY": {
+        "date": None,
+        "daily_pnl": 0.0,
+        "peak_pnl": 0.0,
+        "completed_trades": 0,
+        "cooldown_candles": 0,
+        "consecutive_losses": 0,
+        "halted_for_day": False,
+        "last_trade_pnl": 0.0,
+    },
+    "MCX": {
+        "date": None,
+        "daily_pnl": 0.0,
+        "peak_pnl": 0.0,
+        "completed_trades": 0,
+        "cooldown_candles": 0,
+        "consecutive_losses": 0,
+        "halted_for_day": False,
+        "last_trade_pnl": 0.0,
+    },
 }
 RUNTIME_SETTINGS: Settings | None = None
 RUNTIME_DATABASE: TradingDatabase | None = None
@@ -119,7 +159,7 @@ def main() -> None:
                 last_completed.end.strftime("%Y-%m-%d %H:%M"),
                 generated_signal.signal,
             )
-        _handle_generated_signal(symbol, generated_signal, premium_service, mcx_option_chain_service, last_completed.close if last_completed else 0.0, trade_manager, order_manager, candle_manager)
+        _handle_generated_signal(symbol, market_type, generated_signal, premium_service, mcx_option_chain_service, last_completed.close if last_completed else 0.0, trade_manager, order_manager, candle_manager)
 
     def handle_closed_candle(candle) -> None:
         candle_manager.on_new_closed_candle(candle)
@@ -141,7 +181,12 @@ def main() -> None:
             logging.warning("DB failed for market data, using in-memory buffer only: %s", exc)
 
         if _mode_label() != "PAPER":
-            _manage_active_trade(symbol, trade_manager, premium_service, order_manager, candle_manager)
+            if market_type == "EQUITY":
+                manage_nifty_trade(symbol, trade_manager, premium_service, order_manager, candle_manager)
+            elif market_type == "MCX":
+                manage_mcx_trade(symbol, trade_manager, premium_service, order_manager, candle_manager)
+            else:
+                logging.warning("Unknown market type")
 
         generated = strategy.evaluate(_default_sentiment())
         if generated is None:
@@ -152,7 +197,7 @@ def main() -> None:
         except Exception as exc:
             logging.warning("Failed to store signal in DB: %s", exc)
 
-        _handle_generated_signal(symbol, generated, premium_service, mcx_option_chain_service, candle.close, trade_manager, order_manager, candle_manager)
+        _handle_generated_signal(symbol, market_type, generated, premium_service, mcx_option_chain_service, candle.close, trade_manager, order_manager, candle_manager)
 
     market_data.on_candle = handle_closed_candle
 
@@ -173,22 +218,23 @@ def main() -> None:
     market_data.start()
 
 
-def _handle_generated_signal(symbol: str, generated_signal, premium_service, mcx_option_chain_service: McxOptionChainService, spot_price: float, trade_manager: TradeManager, order_manager: OrderManager, candle_manager: CandleManager) -> None:
-    _reset_daily_state_if_needed()
+def _handle_generated_signal(symbol: str, market_type: str, generated_signal, premium_service, mcx_option_chain_service: McxOptionChainService, spot_price: float, trade_manager: TradeManager, order_manager: OrderManager, candle_manager: CandleManager) -> None:
+    _reset_daily_state_if_needed(market_type)
     settings = _execution_settings()
+    state = _get_daily_state(market_type)
     if generated_signal.signal not in {"BUY", "SELL"} and trade_manager.has_active_trade(symbol):
         print(colorize("[SKIPPED] Active trade already exists", YELLOW, bold=True))
         return
-    if settings.kill_switch or DAILY_STATE["halted_for_day"]:
+    if settings.kill_switch or state["halted_for_day"]:
         _print_blocked("Kill switch active")
         return
     if _mode_label() != "PAPER" and not _is_trade_window_open(symbol):
         _print_skip("Time filter")
         return
-    if _daily_loss_limit_reached():
+    if _daily_loss_limit_reached(market_type):
         _print_blocked("Daily loss limit reached")
         return
-    if _drawdown_limit_reached():
+    if _drawdown_limit_reached(market_type):
         _print_blocked("Max drawdown reached")
         return
 
@@ -201,11 +247,11 @@ def _handle_generated_signal(symbol: str, generated_signal, premium_service, mcx
     )
     strong_setup = _is_priority_setup(generated_signal, regime_snapshot)
 
-    if _max_trades_reached() and not strong_setup:
+    if _max_trades_reached(market_type) and not strong_setup:
         _print_blocked("Max trades reached")
         return
-    if _mode_label() != "PAPER" and _cooldown_active() and not strong_setup:
-        DAILY_STATE["cooldown_candles"] = max(int(DAILY_STATE["cooldown_candles"]) - 1, 0)
+    if _mode_label() != "PAPER" and _cooldown_active(market_type) and not strong_setup:
+        state["cooldown_candles"] = max(int(state["cooldown_candles"]) - 1, 0)
         _print_skip("Trade cooldown active")
         return
 
@@ -220,7 +266,13 @@ def _handle_generated_signal(symbol: str, generated_signal, premium_service, mcx
             logging.info("[PREMIUM TREND] %s | %s", symbol, direction_reason)
             return
         enriched_signal = enrich_nifty_signal_with_premium(generated_signal, premium) if symbol.strip().upper() == "NIFTY" else enrich_signal_with_premium(generated_signal, premium)
-        if _should_skip_trade(symbol, enriched_signal, premium.last_price, candle_manager, regime_snapshot):
+        if market_type == "EQUITY":
+            skip = nifty_skip(symbol, enriched_signal, premium.last_price, candle_manager, regime_snapshot)
+        elif market_type == "MCX":
+            skip = mcx_skip(symbol, enriched_signal, premium.last_price, candle_manager, regime_snapshot)
+        else:
+            skip = False
+        if skip:
             return
         if _mode_label() != "PAPER":
             _register_trade_plan(symbol, enriched_signal, premium, trade_manager, candle_manager, regime_snapshot)
@@ -236,7 +288,13 @@ def _handle_generated_signal(symbol: str, generated_signal, premium_service, mcx
             logging.info("[PREMIUM TREND] %s | %s", symbol, direction_reason)
             return
         enriched_signal = enrich_nifty_signal_with_premium(generated_signal, premium) if symbol.strip().upper() == "NIFTY" else enrich_signal_with_premium(generated_signal, premium)
-        if _should_skip_trade(symbol, enriched_signal, premium.last_price, candle_manager, regime_snapshot):
+        if market_type == "EQUITY":
+            skip = nifty_skip(symbol, enriched_signal, premium.last_price, candle_manager, regime_snapshot)
+        elif market_type == "MCX":
+            skip = mcx_skip(symbol, enriched_signal, premium.last_price, candle_manager, regime_snapshot)
+        else:
+            skip = False
+        if skip:
             return
         if _mode_label() != "PAPER":
             _register_trade_plan(symbol, enriched_signal, premium, trade_manager, candle_manager, regime_snapshot)
@@ -246,7 +304,13 @@ def _handle_generated_signal(symbol: str, generated_signal, premium_service, mcx
         enriched_signal = enrich_mcx_signal_with_option(symbol, generated_signal, spot_price, option_chain)
         option = enriched_signal.details.option_suggestion if enriched_signal.details is not None else None
         premium_price = option.premium_ltp if option is not None and option.premium_ltp is not None else None
-        if premium_price is not None and _should_skip_trade(symbol, enriched_signal, premium_price, candle_manager, regime_snapshot):
+        if market_type == "EQUITY":
+            skip = nifty_skip(symbol, enriched_signal, premium_price, candle_manager, regime_snapshot) if premium_price is not None else False
+        elif market_type == "MCX":
+            skip = mcx_skip(symbol, enriched_signal, premium_price, candle_manager, regime_snapshot) if premium_price is not None else False
+        else:
+            skip = False
+        if premium_price is not None and skip:
             return
         if option is not None and _mode_label() != "PAPER":
             planned_trade = _register_mcx_trade_plan(symbol, enriched_signal, trade_manager, candle_manager, regime_snapshot)
@@ -425,8 +489,8 @@ def _register_mcx_trade_plan(
     )
 
 
-def _manage_active_trade(symbol: str, trade_manager: TradeManager, premium_service, order_manager: OrderManager, candle_manager: CandleManager) -> bool:
-    _reset_daily_state_if_needed()
+def _manage_active_trade(symbol: str, market_type: str, trade_manager: TradeManager, premium_service, order_manager: OrderManager, candle_manager: CandleManager) -> bool:
+    _reset_daily_state_if_needed(market_type)
     active_trade = trade_manager.get_active_trade(symbol)
     if active_trade is None:
         return False
@@ -466,7 +530,7 @@ def _manage_active_trade(symbol: str, trade_manager: TradeManager, premium_servi
             return True
 
         if active_trade.entry_low <= current_price <= active_trade.entry_high:
-            updated_trade = _try_execute_entry_if_needed(symbol, active_trade, current_price, trade_manager, order_manager)
+            updated_trade = _try_execute_entry_if_needed(symbol, active_trade, current_price, trade_manager, order_manager, market_type)
             if updated_trade is not None and updated_trade.status == "OPEN":
                 _print_trade_running(updated_trade, current_price)
             return True
@@ -474,11 +538,11 @@ def _manage_active_trade(symbol: str, trade_manager: TradeManager, premium_servi
         _print_trade_waiting(active_trade, current_price)
         return True
 
-    if _handle_live_stop_loss_completion(symbol, active_trade, current_price, trade_manager, order_manager):
+    if _handle_live_stop_loss_completion(symbol, active_trade, current_price, trade_manager, order_manager, market_type):
         return True
 
     latest_candle = candle_manager.get_last_completed_candle(symbol)
-    partial_trade = _handle_partial_profit(symbol, active_trade, current_price, trade_manager, order_manager)
+    partial_trade = _handle_partial_profit(symbol, active_trade, current_price, trade_manager, order_manager, market_type)
     active_trade = partial_trade or trade_manager.get_active_trade(symbol) or active_trade
 
     if _should_time_exit(active_trade, current_price):
@@ -488,7 +552,7 @@ def _manage_active_trade(symbol: str, trade_manager: TradeManager, premium_servi
         exit_price = _extract_order_price(exit_order, current_price)
         closed_trade = trade_manager.close_active_trade(symbol, "time_exit", exit_price)
         if closed_trade is not None:
-            _record_trade_result(closed_trade, exit_price)
+            _record_trade_result(closed_trade, exit_price, market_type)
             _print_time_exit(closed_trade, exit_price)
         return True
 
@@ -499,241 +563,13 @@ def _manage_active_trade(symbol: str, trade_manager: TradeManager, premium_servi
         exit_price = _extract_order_price(exit_order, current_price)
         closed_trade = trade_manager.close_active_trade(symbol, "stop_loss_hit", exit_price)
         if closed_trade is not None:
-            _record_trade_result(closed_trade, exit_price)
+            _record_trade_result(closed_trade, exit_price, market_type)
             _print_stop_loss_hit(closed_trade, exit_price)
         return True
 
     updated_trade = _trail_active_trade_if_needed(active_trade, current_price, trade_manager, order_manager, latest_candle)
     _print_trade_running(updated_trade or active_trade, current_price)
     return True
-
-
-def _try_execute_entry_if_needed(symbol: str, active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager) -> ActiveTrade | None:
-    latest_trade = trade_manager.get_active_trade(symbol) or active_trade
-    if latest_trade.order_placed or latest_trade.status != "PENDING_ENTRY":
-        return latest_trade
-    if not (latest_trade.entry_low <= current_price <= latest_trade.entry_high):
-        return latest_trade
-
-    try:
-        execution_price = _adjusted_entry_price(latest_trade, current_price)
-        quantity = _compute_entry_quantity(order_manager, latest_trade, execution_price)
-        managed_order = order_manager.place_market_buy(
-            trading_symbol=latest_trade.trading_symbol,
-            exchange=latest_trade.exchange,
-            last_price=execution_price,
-            stop_loss_price=latest_trade.stop_loss,
-            quantity_override=quantity,
-        )
-        updated_trade = trade_manager.update_active_trade(
-            symbol=symbol,
-            status="OPEN",
-            entry_price=managed_order.entry_price,
-            stop_loss=managed_order.stop_loss_price,
-            initial_stop_loss=latest_trade.initial_stop_loss,
-            quantity=managed_order.quantity,
-            remaining_quantity=managed_order.quantity,
-            highest_price=managed_order.entry_price,
-            mfe_price=managed_order.entry_price,
-            mae_price=managed_order.entry_price,
-            order_placed=True,
-            entry_order_id=managed_order.entry_order_id,
-            stop_loss_order_id=managed_order.stop_loss_order_id,
-            opened_at=datetime.now().isoformat(),
-        )
-        if updated_trade is not None:
-            _print_trade_started(updated_trade)
-        return updated_trade
-    except Exception as exc:
-        logging.exception("Entry order failed for %s", latest_trade.trading_symbol)
-        _print_order_error(f"Order failed for {latest_trade.trading_symbol}: {exc}")
-        trade_manager.close_active_trade(symbol, "entry_order_failed", current_price)
-        return None
-
-
-def _handle_live_stop_loss_completion(symbol: str, active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager) -> bool:
-    if order_manager.mode != "LIVE" or not active_trade.stop_loss_order_id:
-        return False
-
-    try:
-        stop_order = order_manager.check_order_status(active_trade.stop_loss_order_id)
-    except Exception as exc:
-        logging.warning("Unable to check stop-loss order status for %s: %s", active_trade.trading_symbol, exc)
-        _print_order_error(f"Could not verify stop-loss order for {active_trade.trading_symbol}: {exc}")
-        return False
-
-    stop_status = str(stop_order.get("status", "UNKNOWN")).upper()
-    if stop_status == "COMPLETE":
-        exit_price = _extract_order_price(stop_order, active_trade.stop_loss)
-        order_manager.trade_manager.record_trade(
-            mode="LIVE",
-            symbol=active_trade.trading_symbol,
-            side="SELL",
-            quantity=active_trade.remaining_quantity or active_trade.quantity,
-            price=exit_price,
-            status="STOP_LOSS_FILLED",
-            reason="stop_loss_hit",
-            order_id=active_trade.stop_loss_order_id,
-        )
-        closed_trade = trade_manager.close_active_trade(symbol, "stop_loss_hit", exit_price)
-        if closed_trade is not None:
-            _record_trade_result(closed_trade, exit_price)
-            _print_stop_loss_hit(closed_trade, exit_price)
-        return True
-
-    if stop_status in {"REJECTED", "CANCELLED"} and current_price <= active_trade.stop_loss:
-        _print_order_error(f"Stop-loss order {stop_status.lower()} for {active_trade.trading_symbol}. Exiting at market.")
-        exit_order = _safe_exit_position(active_trade, current_price, order_manager, quantity=active_trade.remaining_quantity or active_trade.quantity, reason="emergency_stop_loss_exit")
-        if exit_order is None:
-            return True
-        exit_price = _extract_order_price(exit_order, current_price)
-        closed_trade = trade_manager.close_active_trade(symbol, "emergency_stop_loss_exit", exit_price)
-        if closed_trade is not None:
-            _record_trade_result(closed_trade, exit_price)
-            _print_stop_loss_hit(closed_trade, exit_price)
-        return True
-
-    return False
-
-
-def _safe_exit_position(
-    active_trade: ActiveTrade,
-    current_price: float,
-    order_manager: OrderManager,
-    quantity: int | None = None,
-    reason: str = "manual_exit",
-):
-    try:
-        exit_quantity = quantity or active_trade.remaining_quantity or active_trade.quantity
-        if order_manager.mode == "LIVE" and active_trade.stop_loss_order_id:
-            try:
-                order_manager.cancel_order(active_trade.stop_loss_order_id)
-            except Exception as exc:
-                logging.warning("Unable to cancel stop-loss order for %s before exit: %s", active_trade.trading_symbol, exc)
-        return order_manager.exit_position(
-            trading_symbol=active_trade.trading_symbol,
-            exchange=active_trade.exchange,
-            quantity=exit_quantity,
-            last_price=current_price,
-            reason=reason,
-        )
-    except Exception as exc:
-        logging.exception("Exit order failed for %s", active_trade.trading_symbol)
-        _print_order_error(f"Exit failed for {active_trade.trading_symbol}: {exc}")
-        return None
-
-
-def _trail_active_trade_if_needed(active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager, latest_candle=None) -> ActiveTrade | None:
-    entry_price = active_trade.entry_price
-    if entry_price is None or active_trade.quantity <= 0:
-        return active_trade
-
-    settings = _execution_settings()
-    highest_price = max(active_trade.highest_price or entry_price, current_price)
-    initial_risk = max(entry_price - active_trade.initial_stop_loss, 0.01)
-    reward_multiple = max((highest_price - entry_price) / initial_risk, 0.0)
-
-    locked_stop = active_trade.stop_loss
-    if reward_multiple >= 1.0:
-        locked_stop = max(locked_stop, entry_price)
-    if reward_multiple >= 1.5:
-        locked_stop = max(locked_stop, entry_price + (initial_risk * 0.5))
-    if reward_multiple >= 2.0:
-        locked_stop = max(locked_stop, entry_price + initial_risk)
-
-    if settings.trailing_mode == "FIXED_STEP":
-        trailing_candidate = highest_price * (1.0 - settings.fixed_trail_step_pct)
-    else:
-        trailing_buffer = max(highest_price * settings.trailing_buffer_pct, initial_risk * settings.trailing_rr_lock_step)
-        trailing_candidate = highest_price - trailing_buffer
-
-    new_stop_loss = max(active_trade.stop_loss, locked_stop, trailing_candidate)
-    new_stop_loss = min(new_stop_loss, current_price * 0.995)
-
-    if highest_price <= (active_trade.highest_price or entry_price) and new_stop_loss <= active_trade.stop_loss:
-        return active_trade
-
-    if new_stop_loss <= active_trade.stop_loss:
-        return trade_manager.update_active_trade(symbol=active_trade.symbol, highest_price=highest_price)
-
-    broker_stop_loss = new_stop_loss
-    if order_manager.mode == "LIVE" and active_trade.stop_loss_order_id:
-        try:
-            broker_stop_loss = order_manager.trail_stop_loss_to_price(
-                trading_symbol=active_trade.trading_symbol,
-                exchange=active_trade.exchange,
-                quantity=active_trade.remaining_quantity or active_trade.quantity,
-                stop_loss_order_id=active_trade.stop_loss_order_id,
-                current_stop_loss_price=active_trade.stop_loss,
-                new_stop_loss_price=new_stop_loss,
-            )
-        except Exception as exc:
-            logging.exception("Failed to trail stop for %s", active_trade.trading_symbol)
-            _print_order_error(f"Stop-loss modify failed for {active_trade.trading_symbol}: {exc}")
-            return trade_manager.update_active_trade(symbol=active_trade.symbol, highest_price=highest_price)
-
-    updated = trade_manager.update_active_trade(
-        symbol=active_trade.symbol,
-        stop_loss=broker_stop_loss,
-        highest_price=highest_price,
-    )
-    if updated is not None:
-        _print_trail_update(updated, current_price)
-    return updated
-
-
-def _print_trade_started(active_trade: ActiveTrade) -> None:
-    lines = [
-        f"[{_mode_label()} TRADE STARTED]",
-        f"Bought {active_trade.trading_symbol} at {_fmt_rupee(active_trade.entry_price or active_trade.entry_high)}",
-        f"Qty: {active_trade.quantity}",
-        f"Initial SL: {_fmt_rupee(active_trade.stop_loss)}",
-        f"Target: {_fmt_rupee(active_trade.target_price)}" if active_trade.target_price is not None else "Target: Open",
-        f"Regime: {active_trade.regime} | RR: {active_trade.rr_ratio:.2f}",
-    ]
-    print(colorize("\n".join(lines), _mode_color(), bold=True))
-
-def _print_trade_waiting(active_trade: ActiveTrade, current_price: float) -> None:
-    lines = [
-        f"[{_mode_label()} WAITING FOR ENTRY]",
-        f"{_contract_label(active_trade)} is inside watch mode.",
-        f"Entry Range: {_fmt_rupee(active_trade.entry_low)} to {_fmt_rupee(active_trade.entry_high)}",
-        f"Current LTP: {_fmt_rupee(current_price)} | Planned SL: {_fmt_rupee(active_trade.initial_stop_loss)}",
-    ]
-    print(colorize("\n".join(lines), _mode_color(), bold=True))
-
-
-def _print_trail_update(active_trade: ActiveTrade, current_price: float) -> None:
-    lines = [
-        f"[{_mode_label()} TRAIL SL UPDATED]",
-        f"Price moved to {_fmt_rupee(current_price)}",
-        f"New SL: {_fmt_rupee(active_trade.stop_loss)}",
-    ]
-    print(colorize("\n".join(lines), _mode_color(), bold=True))
-
-
-def _print_trade_running(active_trade: ActiveTrade, current_price: float) -> None:
-    pnl_text = _format_pnl_pct(active_trade.entry_price, current_price)
-    lines = [
-        f"[{_mode_label()} TRADE RUNNING]",
-        f"LTP: {_fmt_rupee(current_price)} | SL: {_fmt_rupee(active_trade.stop_loss)} | PnL: {pnl_text}",
-    ]
-    if active_trade.target_price is not None:
-        lines.append(f"Target: {_fmt_rupee(active_trade.target_price)} | Realized: {_fmt_rupee(active_trade.realized_pnl)}")
-    print(colorize("\n".join(lines), _mode_color(), bold=True))
-
-def _print_stop_loss_hit(active_trade: ActiveTrade, exit_price: float) -> None:
-    pnl_text = _format_pnl_pct(active_trade.entry_price, exit_price)
-    lines = [
-        f"[{_mode_label()} STOP LOSS HIT]",
-        f"Exited at {_fmt_rupee(exit_price)}",
-        f"PnL: {pnl_text}",
-    ]
-    print(colorize("\n".join(lines), _mode_color(), bold=True))
-
-
-def _print_order_error(message: str) -> None:
-    print(colorize(f"[{_mode_label()} ERROR] {message}", RED, bold=True))
 
 
 def _print_signal(generated_signal) -> None:
@@ -924,33 +760,23 @@ def _extract_order_price(order: dict[str, object], fallback_price: float) -> flo
     return float(average_price)
 
 
-def _contract_label(active_trade: ActiveTrade) -> str:
-    return f"{active_trade.symbol} {active_trade.option_type}".strip()
+def _get_daily_state(market_type: str):
+    return DAILY_STATE.get(market_type, DAILY_STATE["EQUITY"])
 
 
-def _fmt_rupee(value: float) -> str:
-    return f"Rs {value:.2f}"
-
-
-def _format_pnl_pct(entry_price: float | None, current_price: float) -> str:
-    if entry_price is None or entry_price <= 0:
-        return "NA"
-    pnl_pct = ((current_price - entry_price) / entry_price) * 100
-    return f"{pnl_pct:+.2f}%"
-
-
-def _reset_daily_state_if_needed() -> None:
+def _reset_daily_state_if_needed(market_type: str) -> None:
+    state = _get_daily_state(market_type)
     today = date.today().isoformat()
-    if DAILY_STATE["date"] == today:
+    if state["date"] == today:
         return
-    DAILY_STATE["date"] = today
-    DAILY_STATE["daily_pnl"] = 0.0
-    DAILY_STATE["peak_pnl"] = 0.0
-    DAILY_STATE["completed_trades"] = 0
-    DAILY_STATE["cooldown_candles"] = 0
-    DAILY_STATE["consecutive_losses"] = 0
-    DAILY_STATE["halted_for_day"] = False
-    DAILY_STATE["last_trade_pnl"] = 0.0
+    state["date"] = today
+    state["daily_pnl"] = 0.0
+    state["peak_pnl"] = 0.0
+    state["completed_trades"] = 0
+    state["cooldown_candles"] = 0
+    state["consecutive_losses"] = 0
+    state["halted_for_day"] = False
+    state["last_trade_pnl"] = 0.0
 
 
 def _is_trade_window_open(symbol: str) -> bool:
@@ -970,29 +796,33 @@ def _is_trade_window_open(symbol: str) -> bool:
     return _time_in_range(now, morning_open, morning_close) or _time_in_range(now, afternoon_open, afternoon_close)
 
 
-def _daily_loss_limit_reached() -> bool:
+def _daily_loss_limit_reached(market_type: str) -> bool:
+    state = _get_daily_state(market_type)
     settings = _execution_settings()
-    if float(DAILY_STATE["daily_pnl"]) <= (-1 * settings.max_daily_loss):
-        DAILY_STATE["halted_for_day"] = True
+    if float(state["daily_pnl"]) <= (-1 * settings.max_daily_loss):
+        state["halted_for_day"] = True
         return True
     return False
 
 
-def _drawdown_limit_reached() -> bool:
+def _drawdown_limit_reached(market_type: str) -> bool:
+    state = _get_daily_state(market_type)
     settings = _execution_settings()
-    drawdown = float(DAILY_STATE["peak_pnl"]) - float(DAILY_STATE["daily_pnl"])
+    drawdown = float(state["peak_pnl"]) - float(state["daily_pnl"])
     if drawdown >= settings.max_drawdown:
-        DAILY_STATE["halted_for_day"] = True
+        state["halted_for_day"] = True
         return True
     return False
 
 
-def _max_trades_reached() -> bool:
-    return int(DAILY_STATE["completed_trades"]) >= _execution_settings().max_trades_per_day
+def _max_trades_reached(market_type: str) -> bool:
+    state = _get_daily_state(market_type)
+    return int(state["completed_trades"]) >= _execution_settings().max_trades_per_day
 
 
-def _cooldown_active() -> bool:
-    return int(DAILY_STATE["cooldown_candles"]) > 0
+def _cooldown_active(market_type: str) -> bool:
+    state = _get_daily_state(market_type)
+    return int(state["cooldown_candles"]) > 0
 
 
 def _should_skip_trade(symbol: str, generated_signal, premium_price: float, candle_manager: CandleManager, regime_snapshot: MarketRegimeSnapshot) -> bool:
@@ -1207,25 +1037,26 @@ def _signal_extension_penalty(generated_signal, settings) -> tuple[float, str | 
 
 
 # IMPROVED: persist trade analytics and update live performance stats
-def _record_trade_result(active_trade: ActiveTrade, exit_price: float) -> None:
+def _record_trade_result(active_trade: ActiveTrade, exit_price: float, market_type: str) -> None:
+    state = _get_daily_state(market_type)
     entry_price = active_trade.entry_price or 0.0
     exited_quantity = active_trade.remaining_quantity or active_trade.quantity
     running_leg_pnl = (exit_price - entry_price) * exited_quantity
     pnl_amount = float(active_trade.realized_pnl) + running_leg_pnl
-    DAILY_STATE["daily_pnl"] = float(DAILY_STATE["daily_pnl"]) + running_leg_pnl
-    DAILY_STATE["last_trade_pnl"] = pnl_amount
-    DAILY_STATE["peak_pnl"] = max(float(DAILY_STATE["peak_pnl"]), float(DAILY_STATE["daily_pnl"]))
-    DAILY_STATE["completed_trades"] = int(DAILY_STATE["completed_trades"]) + 1
+    state["daily_pnl"] = float(state["daily_pnl"]) + running_leg_pnl
+    state["last_trade_pnl"] = pnl_amount
+    state["peak_pnl"] = max(float(state["peak_pnl"]), float(state["daily_pnl"]))
+    state["completed_trades"] = int(state["completed_trades"]) + 1
     if pnl_amount < 0:
-        DAILY_STATE["consecutive_losses"] = int(DAILY_STATE["consecutive_losses"]) + 1
-        if DAILY_STATE["consecutive_losses"] >= _execution_settings().stop_after_three_losses:
-            DAILY_STATE["halted_for_day"] = True
-        elif DAILY_STATE["consecutive_losses"] >= 2:
-            DAILY_STATE["cooldown_candles"] = _execution_settings().cooldown_after_two_losses
+        state["consecutive_losses"] = int(state["consecutive_losses"]) + 1
+        if state["consecutive_losses"] >= _execution_settings().stop_after_three_losses:
+            state["halted_for_day"] = True
+        elif state["consecutive_losses"] >= 2:
+            state["cooldown_candles"] = _execution_settings().cooldown_after_two_losses
         else:
-            DAILY_STATE["cooldown_candles"] = max(int(DAILY_STATE["cooldown_candles"]), 2)
+            state["cooldown_candles"] = max(int(state["cooldown_candles"]), 2)
     else:
-        DAILY_STATE["consecutive_losses"] = 0
+        state["consecutive_losses"] = 0
 
     if RUNTIME_DATABASE is not None and entry_price > 0:
         opened_at = active_trade.opened_at
@@ -1295,13 +1126,13 @@ def _adjusted_entry_price(active_trade: ActiveTrade, current_price: float) -> fl
     return round(current_price * factor, 2)
 
 
-def _compute_entry_quantity(order_manager: OrderManager, active_trade: ActiveTrade, execution_price: float) -> int:
+def _compute_entry_quantity(order_manager: OrderManager, active_trade: ActiveTrade, execution_price: float, market_type: str) -> int:
     settings = _execution_settings()
     risk_qty = order_manager.calculate_risk_quantity(execution_price, active_trade.stop_loss)
     capital_cap = _risk_based_capital(order_manager, settings.capital_per_trade, execution_price, active_trade.stop_loss)
     if active_trade.regime == "VOLATILE":
         capital_cap = min(capital_cap, settings.capital_per_trade * 0.5)
-    drawdown_scale = _drawdown_position_scale()
+    drawdown_scale = _drawdown_position_scale(market_type)
     capital_cap = max(capital_cap * drawdown_scale, execution_price)
     capital_qty = order_manager.calculate_quantity(execution_price, capital_override=capital_cap)
     base_quantity = min(risk_qty, capital_qty)
@@ -1309,15 +1140,16 @@ def _compute_entry_quantity(order_manager: OrderManager, active_trade: ActiveTra
     return max(base_quantity, lot_floor)
 
 
-def _drawdown_position_scale() -> float:
+def _drawdown_position_scale(market_type: str) -> float:
+    state = _get_daily_state(market_type)
     settings = _execution_settings()
     if settings.max_daily_loss <= 0:
         return 1.0
-    daily_loss_pressure = abs(min(float(DAILY_STATE["daily_pnl"]), 0.0)) / settings.max_daily_loss
+    daily_loss_pressure = abs(min(float(state["daily_pnl"]), 0.0)) / settings.max_daily_loss
     scale = 1.0
     if daily_loss_pressure >= settings.drawdown_size_reduction_start_pct:
         scale = min(scale, settings.drawdown_size_reduction_factor)
-    if int(DAILY_STATE["consecutive_losses"]) >= 2:
+    if int(state["consecutive_losses"]) >= 2:
         scale = min(scale, settings.drawdown_size_reduction_factor)
     return max(scale, 0.25)
 
@@ -1420,7 +1252,8 @@ def _entry_confirmation_passed(active_trade: ActiveTrade, candle_manager: Candle
     return True
 
 
-def _handle_partial_profit(symbol: str, active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager) -> ActiveTrade | None:
+def _handle_partial_profit(symbol: str, active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager, market_type: str) -> ActiveTrade | None:
+    state = _get_daily_state(market_type)
     if active_trade.partial_exit_done or active_trade.entry_price is None or active_trade.remaining_quantity <= 1:
         return active_trade
 
@@ -1470,8 +1303,8 @@ def _handle_partial_profit(symbol: str, active_trade: ActiveTrade, current_price
         reason="partial_profit",
     )
     realized_pnl = (exit_price - (active_trade.entry_price or exit_price)) * partial_quantity
-    DAILY_STATE["daily_pnl"] = float(DAILY_STATE["daily_pnl"]) + realized_pnl
-    DAILY_STATE["peak_pnl"] = max(float(DAILY_STATE["peak_pnl"]), float(DAILY_STATE["daily_pnl"]))
+    state["daily_pnl"] = float(state["daily_pnl"]) + realized_pnl
+    state["peak_pnl"] = max(float(state["peak_pnl"]), float(state["daily_pnl"]))
     updated_trade = trade_manager.update_active_trade(
         symbol=symbol,
         remaining_quantity=remaining_quantity,
@@ -1514,40 +1347,6 @@ def _calculate_rr(entry_price: float, stop_loss: float, target_price: float) -> 
     return round(reward / risk, 2)
 
 
-def _parse_time(value: str) -> dt_time:
-    return datetime.strptime(value.strip(), "%H:%M").time()
-
-
-def _time_in_range(value: dt_time, start: dt_time, end: dt_time) -> bool:
-    return start <= value <= end
-
-
-def _print_partial_exit(active_trade: ActiveTrade, exit_price: float, quantity: int) -> None:
-    lines = [
-        f"[{_mode_label()} PARTIAL EXIT]",
-        f"Booked {quantity} at {_fmt_rupee(exit_price)}",
-        f"Remaining Qty: {active_trade.remaining_quantity} | New SL: {_fmt_rupee(active_trade.stop_loss)}",
-    ]
-    print(colorize("\n".join(lines), _mode_color(), bold=True))
-
-
-def _print_time_exit(active_trade: ActiveTrade, exit_price: float) -> None:
-    lines = [
-        f"[{_mode_label()} TIME EXIT]",
-        f"Exited {active_trade.trading_symbol} at {_fmt_rupee(exit_price)}",
-        f"PnL: {_format_pnl_pct(active_trade.entry_price, exit_price)}",
-    ]
-    print(colorize("\n".join(lines), _mode_color(), bold=True))
-
-
-def _print_skip(message: str) -> None:
-    print(colorize(f"[{_mode_label()} SKIPPED] {message}", YELLOW, bold=True))
-
-
-def _print_blocked(message: str) -> None:
-    print(colorize(f"[{_mode_label()} BLOCKED] {message}", RED, bold=True))
-
-
 def _print_mode_banner(mode: str, symbol: str, market_type: str) -> None:
     color = GREEN if mode == "LIVE" else CYAN
     lines = [
@@ -1556,14 +1355,6 @@ def _print_mode_banner(mode: str, symbol: str, market_type: str) -> None:
         "Real broker orders enabled." if mode == "LIVE" else "Paper simulation only. No real orders will be placed.",
     ]
     print(colorize("\n".join(lines), color, bold=True))
-
-
-def _mode_label() -> str:
-    return get_mode().upper()
-
-
-def _mode_color() -> str:
-    return GREEN if _mode_label() == "LIVE" else CYAN
 
 
 def _env_float(name: str, default: float) -> float:
@@ -1588,6 +1379,13 @@ if __name__ == "__main__":
 
 
  
+
+
+
+
+
+
+
 
 
 

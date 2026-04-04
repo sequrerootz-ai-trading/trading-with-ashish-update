@@ -7,7 +7,7 @@ from config import get_mode
 from data.option_premium import PremiumQuote
 from engine.signal_engine import evaluate_nifty_price_action
 from services.option_selector import select_nifty_option
-from strategy.signal_types import GeneratedSignal, IndicatorDetails, OptionSuggestion, SignalContext, SignalDetails
+from strategy.common.signal_types import GeneratedSignal, IndicatorDetails, OptionSuggestion, SignalContext, SignalDetails
 from utils.calculations import premium_trade_levels
 
 
@@ -271,3 +271,4 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
+

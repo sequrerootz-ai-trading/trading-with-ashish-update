@@ -3,14 +3,14 @@ from __future__ import annotations
 from config import get_market_type
 from data.candle_store import Candle
 from data.database import TradingDatabase
-from strategy.equity_signal_engine import (
+from strategy.nifty.equity_signal_engine import (
     generate_equity_signal_engine,
     get_last_closed_candle,
     store_market_data,
     store_signal,
 )
-from strategy.mcx_signal_engine import generate_mcx_signal_engine
-from strategy.signal_types import GeneratedSignal, SignalContext
+from strategy.mcx.mcx_signal_engine import generate_mcx_signal_engine
+from strategy.common.signal_types import GeneratedSignal, SignalContext
 
 
 def generate_signal(
@@ -32,3 +32,6 @@ __all__ = [
     "store_market_data",
     "store_signal",
 ]
+
+
+

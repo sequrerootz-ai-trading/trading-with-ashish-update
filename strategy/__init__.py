@@ -1,25 +1,25 @@
 """Trading strategy package."""
 
-from strategy.breakout import BreakoutResult, detect_fast_breakout
-from strategy.indicators import (
+from strategy.common.breakout import BreakoutResult, detect_fast_breakout
+from strategy.common.indicators import (
     IndicatorSnapshot,
     calculate_ema,
     calculate_indicators,
     calculate_rsi,
     detect_trend,
 )
-from strategy.signal_engine import (
+from strategy.common.signal_engine import (
     generate_signal,
     get_last_closed_candle,
     store_market_data,
     store_signal,
 )
-from strategy.signal_generator import FinalSignal, generate_final_signal
-from strategy.nifty_options import generate_nifty_hybrid_signal, generate_nifty_options_signal
-from strategy.signal_types import GeneratedSignal, SignalContext
+from strategy.common.signal_generator import FinalSignal, generate_final_signal
+from strategy.nifty.nifty_options import generate_nifty_hybrid_signal, generate_nifty_options_signal
+from strategy.common.signal_types import GeneratedSignal, SignalContext
 from strategy.strategy import LastClosedCandleStrategy
-from strategy.strategy_equity import generate_equity_signal
-from strategy.strategy_mcx import generate_mcx_signal
+from strategy.nifty.strategy_equity import generate_equity_signal
+from strategy.mcx.strategy_mcx import generate_mcx_signal
 
 __all__ = [
     "BreakoutResult",
@@ -43,3 +43,11 @@ __all__ = [
     "store_market_data",
     "store_signal",
 ]
+
+
+
+
+
+
+
+

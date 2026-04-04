@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from strategy.indicators import calculate_indicators, detect_trend
-from strategy.signal_types import SignalContext
+from strategy.common.indicators import calculate_indicators, detect_trend
+from strategy.common.signal_types import SignalContext
 from utils.calculations import compute_close_position, compute_volume_ratio
 
 
@@ -184,3 +184,5 @@ def _empty_result(reason: str) -> dict[str, object]:
         "trend_strength": 0.0,
         "sideways": False,
     }
+
+

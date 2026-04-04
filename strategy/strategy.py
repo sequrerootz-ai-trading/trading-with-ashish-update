@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 
 from data.candle_manager import CandleManager
-from strategy.signal_engine import generate_signal
-from strategy.signal_types import GeneratedSignal, SignalContext
+from strategy.common.signal_engine import generate_signal
+from strategy.common.signal_types import GeneratedSignal, SignalContext
 
 
 logger = logging.getLogger(__name__)
@@ -52,3 +52,5 @@ class LastClosedCandleStrategy:
             ),
             sentiment,
         )
+
+

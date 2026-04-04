@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from strategy.indicators import calculate_indicators, detect_trend
-from strategy.signal_types import GeneratedSignal, SignalContext
+from strategy.common.indicators import calculate_indicators, detect_trend
+from strategy.common.signal_types import GeneratedSignal, SignalContext
 
 
 def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
@@ -163,3 +163,5 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
+
+

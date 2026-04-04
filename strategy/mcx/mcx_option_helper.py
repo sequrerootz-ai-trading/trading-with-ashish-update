@@ -5,7 +5,7 @@ import os
 from dataclasses import replace
 from typing import Any
 
-from strategy.signal_types import GeneratedSignal, IndicatorDetails, OptionSuggestion, SignalDetails
+from strategy.common.signal_types import GeneratedSignal, IndicatorDetails, OptionSuggestion, SignalDetails
 
 
 logger = logging.getLogger(__name__)
@@ -204,3 +204,4 @@ def _coerce_float(value: object, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
