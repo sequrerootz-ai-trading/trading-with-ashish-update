@@ -13,12 +13,14 @@ from utils.calculations import premium_trade_levels
 
 logger = logging.getLogger(__name__)
 
-FAST_BUY_BREAK_CLOSE_POSITION = 0.58
-FAST_SELL_BREAK_CLOSE_POSITION = 0.40
-DEEP_OVERSOLD_RSI = 18.0
-OVERSOLD_RSI = 22.0
-DEEP_OVERBOUGHT_RSI = 82.0
-OVERBOUGHT_RSI = 78.0
+FAST_BUY_BREAK_CLOSE_POSITION = 0.55   # was 0.58
+FAST_SELL_BREAK_CLOSE_POSITION = 0.45  # was 0.40
+
+DEEP_OVERSOLD_RSI = 15.0   # was 18.0
+OVERSOLD_RSI = 20.0        # was 22.0
+
+DEEP_OVERBOUGHT_RSI = 88.0   # 🔥 was 82.0
+OVERBOUGHT_RSI = 82.0        # 🔥 was 78.0
 
 
 def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
@@ -46,14 +48,18 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     volatility_ok = bool(analysis["volatility_ok"])
     volume_ok = bool(analysis["volume_ok"])
     rsi = float(analysis["rsi"]) if analysis["rsi"] is not None else 50.0
+    break_strength = float(analysis.get("break_strength") or 0.0)
+    break_type = str(analysis.get("break_type") or "none")
+    break_reason = str(analysis.get("break_reason") or "na")
+    live_price = float(analysis.get("live_price") or current_candle.close)
     bullish_break_distance = float(analysis.get("bullish_break_distance") or 0.0)
     bearish_break_distance = float(analysis.get("bearish_break_distance") or 0.0)
     price_reference = max(float(current_candle.close), 0.01)
     fast_timeframe = data.timeframe_minutes <= 3
     bullish_close_threshold = FAST_BUY_BREAK_CLOSE_POSITION if fast_timeframe else 0.55
     bearish_close_threshold = FAST_SELL_BREAK_CLOSE_POSITION if fast_timeframe else 0.45
-    strong_bullish_break = bullish_break_distance >= max(price_reference * 0.00035, 7.5)
-    strong_bearish_break = bearish_break_distance >= max(price_reference * 0.00035, 7.5)
+    strong_bullish_break = bullish_break_distance >= max(price_reference * 0.00025, 3.0) or break_strength >= 0.0003
+    strong_bearish_break = bearish_break_distance >= max(price_reference * 0.00025, 3.0) or break_strength >= 0.0003
     bearish_rsi_extended = rsi <= OVERSOLD_RSI
     bullish_rsi_extended = rsi >= OVERBOUGHT_RSI
     bearish_rsi_exhausted = rsi <= DEEP_OVERSOLD_RSI
@@ -63,25 +69,17 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     confidence = 0.0
     reason: list[str] = []
 
-    if trend == "bullish" and bullish_break and close_position >= bullish_close_threshold and bullish_score >= 3 and (strong_bullish_break or not bullish_rsi_exhausted):
-        signal = "BUY_CE"
-        confidence = min(0.52 + (bullish_score * 0.07), 0.79)
+    if trend == "bullish" and bullish_break and close_position >= bullish_close_threshold and bullish_score >= 3 and (strong_bullish_break or not bullish_rsi_exhausted or (momentum_ok and volume_ok)):
         if bullish_rsi_extended:
-            confidence -= 0.08 if bullish_rsi_exhausted else 0.04
             reason.append("rsi_extended")
         reason.extend(["ema_trend_up", "confirmed_breakout", f"score={bullish_score}"])
     elif trend == "bearish" and bearish_break and close_position <= bearish_close_threshold and bearish_score >= 3 and (strong_bearish_break or not bearish_rsi_exhausted):
-        signal = "BUY_PE"
-        confidence = min(0.52 + (bearish_score * 0.07), 0.79)
         if bearish_rsi_extended:
-            confidence -= 0.10 if bearish_rsi_exhausted else 0.05
             reason.append("rsi_extended")
         reason.extend(["ema_trend_down", "confirmed_breakdown", f"score={bearish_score}"])
     else:
         continuation_signal, continuation_confidence, continuation_reason = _detect_trend_continuation(data, analysis)
         if continuation_signal != "NO_TRADE":
-            signal = continuation_signal
-            confidence = continuation_confidence
             reason.extend(continuation_reason)
         else:
             if trend == "bearish" and bearish_rsi_exhausted:
@@ -91,20 +89,122 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             else:
                 reason.append("soft_filter_not_met")
 
+    ema9 = float(analysis["ema_9"]) if analysis["ema_9"] is not None else 0.0
+    ema21 = float(analysis["ema_21"]) if analysis["ema_21"] is not None else 0.0
+    close_pos = close_position
+    confidence_trend = 0.2 if trend in {"bullish", "bearish"} and ema9 > 0 and ema21 > 0 else 0.0
+    confidence_breakout = min(0.4, break_strength * 2.0) if break_strength > 0 else 0.0
+    confidence_momentum = 0.15 if momentum_ok else 0.0
+    confidence_volume = 0.1 if volume_ok else 0.0
+    confidence_volatility = 0.1 if volatility_ok else -0.05
+    if close_pos > 0.7:
+        confidence_close = 0.1
+    elif close_pos > 0.5:
+        confidence_close = 0.05
+    else:
+        confidence_close = 0.0
+    confidence_rsi = 0.05 if 50.0 < rsi < 70.0 else 0.0
+    confidence = max(
+        0.0,
+        min(
+            confidence_trend
+            + confidence_breakout
+            + confidence_momentum
+            + confidence_volume
+            + confidence_volatility
+            + confidence_close
+            + confidence_rsi,
+            1.0,
+        ),
+    )
+
+    breakout_direction = break_type
+    trend_aligned = (trend == "bullish" and breakout_direction == "upside") or (trend == "bearish" and breakout_direction == "downside")
+    decision_reason = "soft_filter_not_met"
+    if breakout_direction in {"upside", "downside"} and not trend_aligned:
+        confidence = max(confidence - 0.1, 0.0)
+
+    allow_trade = False
+    if breakout_direction in {"upside", "downside"} and break_strength >= 0.12 and confidence >= 0.6:
+        allow_trade = True
+        decision_reason = "strong_breakout_override"
+    elif breakout_direction in {"upside", "downside"} and trend_aligned and confidence >= 0.5:
+        allow_trade = True
+        decision_reason = "trend_aligned_breakout"
+
+    option_entry_reason = decision_reason
+    soft_setup_present = any("soft" in item for item in reason)
+    if allow_trade and soft_setup_present:
+        confidence = max(confidence - 0.10, 0.0)
+        option_entry_reason = "soft_setup_penalty_applied"
+
+    if allow_trade and break_strength >= 0.23 and confidence >= 0.75:
+        decision_reason = "strong_breakout_override_soft_adjusted" if soft_setup_present else "strong_breakout_override"
+        option_entry_reason = decision_reason
+
+    if allow_trade and break_strength == 0:
+        option_entry_reason = "weak_breakout_not_suitable_for_options"
+        signal = "NO_TRADE"
+        decision_reason = option_entry_reason
+        reason.append(decision_reason)
+    elif allow_trade and break_strength < 0.18:
+        if trend == "bullish" and momentum_ok:
+            pass  # 🔥 allow trend continuation
+        else:
+            option_entry_reason = "weak_breakout_not_suitable_for_options"
+            signal = "NO_TRADE"
+            decision_reason = option_entry_reason
+            reason.append(decision_reason)
+    elif allow_trade and confidence < 0.6:
+        option_entry_reason = "low_confidence_for_options"
+        signal = "NO_TRADE"
+        decision_reason = option_entry_reason
+        reason.append(decision_reason)
+    elif allow_trade and not volatility_ok:
+        if momentum_ok and volume_ok:
+            pass  # 🔥 allow strong move
+        else:
+            option_entry_reason = "low_volatility_not_suitable"
+            signal = "NO_TRADE"
+            decision_reason = option_entry_reason
+            reason.append(decision_reason)
+    elif allow_trade and close_pos < 0.5:
+        option_entry_reason = "weak_candle"
+        signal = "NO_TRADE"
+        decision_reason = option_entry_reason
+        reason.append(decision_reason)
+    elif allow_trade and break_strength < 0.25 and momentum_ok:
+        option_entry_reason = "no_price_expansion"
+        signal = "NO_TRADE"
+        decision_reason = option_entry_reason
+        reason.append(decision_reason)
+    elif allow_trade:
+        if breakout_direction == "upside":
+            signal = "BUY_CE"
+        elif breakout_direction == "downside":
+            signal = "BUY_PE"
+        reason.append(decision_reason)
+    else:
+        signal = "NO_TRADE"
+        reason.append(decision_reason)
+
     reason.extend(
         [
             f"ema9={_fmt(analysis['ema_9'])}",
             f"ema21={_fmt(analysis['ema_21'])}",
             f"rsi={_fmt(analysis['rsi'])}",
-            f"break_strength={bearish_break_distance if signal == 'BUY_PE' else bullish_break_distance:.2f}",
+            f"break_strength={break_strength:.2f}",
+            f"break_type={break_type}",
             f"trend={trend}",
             f"timeframe={data.timeframe_minutes}m",
+            f"live_price={live_price:.2f}",
             f"breakout={float(analysis['breakout_level']):.2f}",
             f"breakdown={float(analysis['breakdown_level']):.2f}",
             f"volume_ok={volume_ok}",
             f"momentum_ok={momentum_ok}",
             f"volatility_ok={volatility_ok}",
             f"close_pos={close_position:.2f}",
+            f"break_reason={break_reason}",
         ]
     )
 
@@ -135,6 +235,48 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     )
 
     logger.info(
+        "[BREAK_STRENGTH] value=%.2f | type=%s | live_price=%.2f | breakout=%.2f | breakdown=%.2f | reason=%s",
+        break_strength,
+        break_type,
+        live_price,
+        float(analysis["breakout_level"]),
+        float(analysis["breakdown_level"]),
+        break_reason,
+    )
+    logger.info(
+        "[CONFIDENCE] total=%.2f | trend=%.2f breakout=%.2f momentum=%.2f volume=%.2f volatility=%.2f close_pos=%.2f rsi=%.2f",
+        confidence,
+        confidence_trend,
+        confidence_breakout,
+        confidence_momentum,
+        confidence_volume,
+        confidence_volatility,
+        confidence_close,
+        confidence_rsi,
+    )
+    if signal == "NO_TRADE":
+        logger.info(
+            "[OPTION_ENTRY_FILTER] status=REJECTED | reason=%s",
+            option_entry_reason,
+        )
+    else:
+        logger.info(
+            "[OPTION_ENTRY_FILTER] status=PASSED | break_strength=%.2f | confidence=%.2f | close_pos=%.2f | reason=%s",
+            break_strength,
+            confidence,
+            close_pos,
+            option_entry_reason,
+        )
+    logger.info(
+        "[SIGNAL_DECISION] signal=%s | reason=%s | break_strength=%.2f | confidence=%.2f | trend=%s | break_type=%s",
+        signal,
+        decision_reason,
+        break_strength,
+        confidence,
+        trend,
+        break_type,
+    )
+    logger.info(
         "[NIFTY_OPTION_SIGNAL] signal=%s | confidence=%.2f | reason=%s",
         signal,
         confidence,
@@ -159,6 +301,10 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             "bullish_score": bullish_score,
             "bearish_score": bearish_score,
             "close_position": round(close_position, 4),
+            "break_strength": break_strength,
+            "break_type": break_type,
+            "break_reason": break_reason,
+            "live_price": round(live_price, 2),
             "volume_ok": volume_ok,
             "momentum_ok": momentum_ok,
             "volatility_ok": volatility_ok,
@@ -264,6 +410,59 @@ def _detect_trend_continuation(data: SignalContext, analysis: dict[str, object])
         confidence = min(0.50 + (bearish_score * 0.06), 0.72)
         return "BUY_PE", confidence, ["ema_trend_down", "trend_continuation_entry", f"score={bearish_score}"]
 
+    strong_bullish_push = (
+        strong_trend_up
+        and close_position >= 0.85
+        and current_close > current_open
+        and current_close > previous_close
+        and volume_ok
+        and no_bullish_reversal
+        and not bullish_break
+    )
+    strong_bearish_push = (
+        strong_trend_down
+        and close_position <= 0.15
+        and current_close < current_open
+        and current_close < previous_close
+        and volume_ok
+        and no_bearish_reversal
+        and not bearish_break
+    )
+
+    logger.info(
+        "[CONTINUATION_CHECK] trend=%s | close_pos=%.2f | volume_ok=%s | momentum_ok=%s | weak_follow=%s | bullish_push=%s | bearish_push=%s | bullish_break=%s | bearish_break=%s",
+        trend,
+        close_position,
+        volume_ok,
+        momentum_ok,
+        weak_follow_through,
+        strong_bullish_push,
+        strong_bearish_push,
+        bullish_break,
+        bearish_break,
+    )
+
+    if strong_bullish_push:
+        confidence = min(0.54 + (bullish_score * 0.05), 0.74)
+        logger.info(
+            "[CONTINUATION_DECISION] signal=BUY_CE | reason=strong_bullish_continuation | confidence=%.2f | close=%.2f | prev_close=%.2f",
+            confidence,
+            current_close,
+            previous_close,
+        )
+        return "BUY_CE", confidence, ["ema_trend_up", "strong_bullish_continuation", f"score={bullish_score}"]
+
+    if strong_bearish_push:
+        confidence = min(0.54 + (bearish_score * 0.05), 0.74)
+        logger.info(
+            "[CONTINUATION_DECISION] signal=BUY_PE | reason=strong_bearish_continuation | confidence=%.2f | close=%.2f | prev_close=%.2f",
+            confidence,
+            current_close,
+            previous_close,
+        )
+        return "BUY_PE", confidence, ["ema_trend_down", "strong_bearish_continuation", f"score={bearish_score}"]
+
+    logger.info("[CONTINUATION_DECISION] signal=NO_TRADE | reason=no_continuation_setup")
     return "NO_TRADE", 0.0, []
 
 

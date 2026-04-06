@@ -142,24 +142,21 @@ def main() -> None:
             historical_result[-1].end.strftime("%Y-%m-%d %H:%M") if historical_result else "NA",
         )
 
-    strategy = LastClosedCandleStrategy(candle_manager, symbol, market_type, timeframe_minutes=settings.candle_interval_minutes)
+    strategy = LastClosedCandleStrategy(
+        candle_manager,
+        symbol,
+        market_type,
+        timeframe_minutes=settings.candle_interval_minutes,
+        live_price_getter=market_data.get_latest_price,
+    )
 
-    generated_signal = strategy.evaluate(_default_sentiment())
-    if generated_signal is not None:
-        try:
-            store_signal(generated_signal, database)
-        except Exception as exc:
-            logging.warning("Failed to store startup signal in DB: %s", exc)
-
-        last_completed = candle_manager.get_last_completed_candle(symbol)
-        if last_completed is not None:
-            logging.info(
-                "[INFO] Processing SYMBOL: %s | Startup analysis ready | last_completed=%s | signal=%s",
-                symbol,
-                last_completed.end.strftime("%Y-%m-%d %H:%M"),
-                generated_signal.signal,
-            )
-        _handle_generated_signal(symbol, market_type, generated_signal, premium_service, mcx_option_chain_service, last_completed.close if last_completed else 0.0, trade_manager, order_manager, candle_manager)
+    last_completed = candle_manager.get_last_completed_candle(symbol)
+    if last_completed is not None:
+        logging.info(
+            "[INFO] Processing SYMBOL: %s | Startup analysis skipped | waiting for next live candle close | last_completed=%s",
+            symbol,
+            last_completed.end.strftime("%Y-%m-%d %H:%M"),
+        )
 
     def handle_closed_candle(candle) -> None:
         candle_manager.on_new_closed_candle(candle)
@@ -209,7 +206,7 @@ def main() -> None:
         settings.candle_interval_minutes,
     )
     logging.info(
-        "Historical backfill completed. Startup analysis finished using last completed candle. exchange=%s",
+        "Historical backfill completed. Startup signal generation is disabled; waiting for next live candle close. exchange=%s",
         instrument.exchange,
     )
     _print_mode_banner(mode, symbol, market_type)
@@ -604,13 +601,22 @@ def _print_signal(generated_signal) -> None:
 def _log_no_trade(symbol: str, reason: str) -> None:
     details = _parse_reason_details(reason)
     logging.info(
-        "[NO TRADE] %s | Market bias=%s | Entry trigger=%s | Why=%s%s",
+        "[NO TRADE] %s | signal=NO_TRADE | bias=%s | trigger=%s | why=%s%s",
         symbol,
         details["market_bias"],
         details["entry_trigger"],
         details["why"],
         details["levels"],
     )
+    line = " | ".join(
+        [
+            colorize("signal=NO_TRADE", RED, bold=True),
+            colorize(f"Entry trigger={details['entry_trigger']}", YELLOW, bold=True),
+            colorize(f"Why={details['why']}", CYAN),
+        ]
+    )
+    print(colorize(f"[{_mode_label()} NO TRADE] {symbol}", YELLOW, bold=True))
+    print(line)
 
 
 def _friendly_signal(signal: str) -> str:
@@ -714,6 +720,28 @@ def _parse_reason_details(reason: str) -> dict[str, str]:
     elif "insufficient_closed_candles" in parts:
         entry_trigger = "Waiting"
         why = "Not enough closed candles yet"
+    elif "soft_filter_not_met" in parts:
+        entry_trigger = "Setup weak"
+        why = "Breakout or continuation setup was not strong enough"
+    elif "weak_body" in parts:
+        entry_trigger = "Weak candle body"
+        why = "Candle body was too small for entry"
+    elif "low_range" in parts:
+        entry_trigger = "Low expansion"
+        why = "Candle range was too small for entry"
+    elif any(part.startswith("low_conf<") for part in parts):
+        threshold = next((part.split("<", 1)[1] for part in parts if part.startswith("low_conf<")), "")
+        entry_trigger = "Low confidence"
+        why = f"Confidence did not reach threshold {threshold}".strip()
+    elif "call_rejected" in parts:
+        entry_trigger = "Bullish entry failed"
+        why = "Bullish breakout or trend confirmation was not strong enough"
+    elif "put_rejected" in parts:
+        entry_trigger = "Bearish entry failed"
+        why = "Bearish breakdown or trend confirmation was not strong enough"
+    elif "invalid_signal" in parts:
+        entry_trigger = "No actionable setup"
+        why = "Strategy did not produce a valid trade setup"
     else:
         entry_trigger = "Not confirmed"
         why = _humanize_reason(reason)

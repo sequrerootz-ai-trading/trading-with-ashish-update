@@ -11,6 +11,10 @@ class SignalContext:
     candles: list[Candle]
     last_candle: Candle | None
     timeframe_minutes: int = 5
+    live_price: float | None = None
+    tick_price: float | None = None
+    ltp: float | None = None
+    last_price: float | None = None
 
 
 @dataclass(frozen=True)

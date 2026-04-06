@@ -6,6 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -14,6 +15,7 @@ from data.candle_store import Candle
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = BASE_DIR / "trading_system.db"
+IST = ZoneInfo("Asia/Kolkata")
 load_dotenv(BASE_DIR / ".env", override=False)
 
 
@@ -98,6 +100,7 @@ class TradingDatabase:
         self.connection.commit()
 
     def store_market_data(self, candle: Candle) -> bool:
+        normalized_end = normalize_market_timestamp(candle.end)
         cursor = self.connection.execute(
             """
             INSERT OR IGNORE INTO market_data (
@@ -106,7 +109,7 @@ class TradingDatabase:
             """,
             (
                 candle.symbol,
-                candle.end.isoformat(),
+                normalized_end.isoformat(),
                 candle.open,
                 candle.high,
                 candle.low,
@@ -130,7 +133,7 @@ class TradingDatabase:
         ).fetchone()
         return self._row_to_candle(row) if row else None
 
-    def get_recent_candles(self, symbol: str, limit: int = 25) -> list[Candle]:
+    def get_recent_candles(self, symbol: str, limit: int = 50) -> list[Candle]:
         rows = self.connection.execute(
             """
             SELECT symbol, timestamp, open, high, low, close, volume
@@ -359,7 +362,7 @@ class TradingDatabase:
 
     @staticmethod
     def _row_to_candle(row: sqlite3.Row) -> Candle:
-        end = datetime.fromisoformat(str(row['timestamp']))
+        end = normalize_market_timestamp(datetime.fromisoformat(str(row['timestamp'])))
         timeframe_minutes = int(os.getenv("CANDLE_INTERVAL_MINUTES", "3"))
         start = end - timedelta(minutes=timeframe_minutes)
         return Candle(
@@ -372,3 +375,11 @@ class TradingDatabase:
             close=float(row['close']),
             volume=int(row['volume']),
         )
+
+
+def normalize_market_timestamp(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(IST).replace(tzinfo=None, second=0, microsecond=0)
+    return value.replace(second=0, microsecond=0)
+
+        

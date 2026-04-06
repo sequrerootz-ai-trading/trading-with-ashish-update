@@ -1,0 +1,18 @@
+strategy/
+   nifty/
+   mcx/
+
+filters/
+   nifty_filters.py
+   mcx_filters.py
+
+engine/
+   router.py
+   trade_manager_nifty.py
+   trade_manager_mcx.py
+   trade_utils.py
+
+utils/
+   runtime_helpers.py
+
+main.py  ✅ clean orchestrator

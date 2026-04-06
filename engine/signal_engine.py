@@ -22,6 +22,11 @@ SIDEWAYS_TREND_STRENGTH_PCT = 0.0003
 TARGET_RISK_MULTIPLIER = 1.2
 STOP_RISK_MULTIPLIER = 0.8
 MIN_BREAK_BUFFER_PCT = 0.00025
+MAX_NORMALIZED_BREAK_STRENGTH = 1.0
+MIN_LIVE_BREAK_MOVE_PCT = 0.0005
+EARLY_BREAK_PROXIMITY = 0.9995
+EARLY_BREAK_STRENGTH = 0.25
+EARLY_BREAK_TREND_STRENGTH_PCT = 0.00045
 
 
 def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
@@ -43,12 +48,6 @@ def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
     breakout_level = max(float(candle.high) for candle in recent_window)
     breakdown_level = min(float(candle.low) for candle in recent_window)
     close_position = compute_close_position(current_high, current_low, current_close)
-
-    bullish_break_distance = max(current_close - breakout_level, current_high - breakout_level, 0.0)
-    bearish_break_distance = max(breakdown_level - current_close, breakdown_level - current_low, 0.0)
-    min_break_distance = max(price * MIN_BREAK_BUFFER_PCT, price * 0.0001, 1.5)
-    bullish_break = bullish_break_distance >= min_break_distance and current_close > breakout_level * BULLISH_BREAKOUT_BUFFER
-    bearish_break = bearish_break_distance >= min_break_distance and current_close < breakdown_level * BEARISH_BREAKDOWN_BUFFER
 
     recent_ranges = [max(float(candle.high) - float(candle.low), 0.0) for candle in data.candles[-6:-1]]
     avg_range = (sum(recent_ranges) / len(recent_ranges)) if recent_ranges else 0.0
@@ -80,6 +79,24 @@ def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
     if indicators.ema_9 is not None and indicators.ema_21 is not None:
         trend_strength = abs(float(indicators.ema_9) - float(indicators.ema_21))
     sideways = trend_strength < (SIDEWAYS_TREND_STRENGTH_PCT * price)
+    break_analysis = calculate_break_strength(
+        breakout_level=breakout_level,
+        breakdown_level=breakdown_level,
+        current_close=current_close,
+        current_high=current_high,
+        current_low=current_low,
+        close_position=close_position,
+        trend=trend,
+        trend_strength=trend_strength,
+        volume_ok=volume_ok,
+        momentum_ok=momentum_ok,
+        live_price=_resolve_live_price(data, fallback=current_close),
+        recent_ranges=recent_ranges,
+    )
+    bullish_break_distance = float(break_analysis["bullish_break_distance"])
+    bearish_break_distance = float(break_analysis["bearish_break_distance"])
+    bullish_break = bool(break_analysis["bullish_break"])
+    bearish_break = bool(break_analysis["bearish_break"])
 
     signal = None
     reason = "No valid breakout setup"
@@ -115,6 +132,10 @@ def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
         "rsi": indicators.rsi,
         "breakout_level": breakout_level,
         "breakdown_level": breakdown_level,
+        "live_price": break_analysis["live_price"],
+        "break_strength": break_analysis["break_strength"],
+        "break_type": break_analysis["break_type"],
+        "break_reason": break_analysis["break_reason"],
         "close_position": round(close_position, 4),
         "bullish_break": bullish_break,
         "bearish_break": bearish_break,
@@ -127,6 +148,140 @@ def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
         "trend_strength": round(trend_strength, 4),
         "sideways": sideways,
     }
+
+
+def calculate_break_strength(
+    *,
+    breakout_level: float,
+    breakdown_level: float,
+    current_close: float,
+    current_high: float,
+    current_low: float,
+    close_position: float,
+    trend: str,
+    trend_strength: float,
+    volume_ok: bool,
+    momentum_ok: bool,
+    live_price: float,
+    recent_ranges: list[float],
+) -> dict[str, object]:
+    live_price = max(float(live_price), 0.01)
+    avg_range = (sum(recent_ranges) / len(recent_ranges)) if recent_ranges else 0.0
+    min_move = max(live_price * MIN_LIVE_BREAK_MOVE_PCT, avg_range * 0.12, 1.0)
+
+    bullish_cross = live_price > breakout_level or current_high > breakout_level
+    bearish_cross = live_price < breakdown_level or current_low < breakdown_level
+    bullish_break_distance = max(live_price - breakout_level, current_high - breakout_level, 0.0)
+    bearish_break_distance = max(breakdown_level - live_price, breakdown_level - current_low, 0.0)
+
+    bullish_sustain = live_price >= breakout_level + (min_move * 0.5) or current_close >= breakout_level
+    bearish_sustain = live_price <= breakdown_level - (min_move * 0.5) or current_close <= breakdown_level
+
+    upside_strength = 0.0
+    downside_strength = 0.0
+    break_type = "none"
+    break_reason = "no_live_cross"
+
+    if bullish_cross:
+        if bullish_break_distance < min_move:
+            break_reason = f"upside_move_below_min_move<{min_move:.2f}"
+        elif not bullish_sustain:
+            break_reason = "upside_not_sustained"
+        else:
+            upside_strength = min(bullish_break_distance / max(breakout_level, 0.01), MAX_NORMALIZED_BREAK_STRENGTH)
+            break_type = "upside"
+            break_reason = "live_breakout"
+
+    if bearish_cross:
+        if bearish_break_distance < min_move:
+            if break_type == "none":
+                break_reason = f"downside_move_below_min_move<{min_move:.2f}"
+        elif not bearish_sustain:
+            if break_type == "none":
+                break_reason = "downside_not_sustained"
+        elif downside_strength == 0.0:
+            downside_strength = min(bearish_break_distance / max(breakdown_level, 0.01), MAX_NORMALIZED_BREAK_STRENGTH)
+            if downside_strength >= upside_strength:
+                break_type = "downside"
+                break_reason = "live_breakdown"
+
+    if break_type == "upside" and upside_strength > 0.0:
+        upside_strength = _boost_break_strength(upside_strength, volume_ok=volume_ok, momentum_ok=momentum_ok)
+    elif break_type == "downside" and downside_strength > 0.0:
+        downside_strength = _boost_break_strength(downside_strength, volume_ok=volume_ok, momentum_ok=momentum_ok)
+    else:
+        early_break_strength, early_break_type = _early_break_strength(
+            live_price=live_price,
+            breakout_level=breakout_level,
+            breakdown_level=breakdown_level,
+            close_position=close_position,
+            trend=trend,
+            trend_strength=trend_strength,
+        )
+        if early_break_strength > 0.0:
+            break_type = early_break_type
+            break_reason = "early_break_pressure"
+            if early_break_type == "upside":
+                upside_strength = early_break_strength
+            else:
+                downside_strength = early_break_strength
+
+    break_strength = upside_strength if break_type == "upside" else downside_strength if break_type == "downside" else 0.0
+    confirmed_break = break_reason.startswith("live_break")
+    bullish_break = break_type == "upside" and break_strength > 0.0 and confirmed_break
+    bearish_break = break_type == "downside" and break_strength > 0.0 and confirmed_break
+
+    return {
+        "live_price": round(live_price, 2),
+        "break_strength": round(min(max(break_strength, 0.0), 1.0), 4),
+        "break_type": break_type,
+        "break_reason": break_reason if break_strength == 0.0 else f"{break_reason}|strength={break_strength:.4f}",
+        "bullish_break": bullish_break,
+        "bearish_break": bearish_break,
+        "bullish_break_distance": round(bullish_break_distance, 2),
+        "bearish_break_distance": round(bearish_break_distance, 2),
+    }
+
+
+def _boost_break_strength(base_strength: float, *, volume_ok: bool, momentum_ok: bool) -> float:
+    boosted_strength = base_strength
+    if volume_ok:
+        boosted_strength += 0.08
+    if momentum_ok:
+        boosted_strength += 0.10
+    return min(boosted_strength, MAX_NORMALIZED_BREAK_STRENGTH)
+
+
+def _early_break_strength(
+    *,
+    live_price: float,
+    breakout_level: float,
+    breakdown_level: float,
+    close_position: float,
+    trend: str,
+    trend_strength: float,
+) -> tuple[float, str]:
+    price_reference = max(live_price, 0.01)
+    trend_is_strong = trend_strength >= price_reference * EARLY_BREAK_TREND_STRENGTH_PCT
+    if not trend_is_strong:
+        return 0.0, "none"
+
+    if trend == "bullish" and close_position >= 0.70 and live_price >= breakout_level * EARLY_BREAK_PROXIMITY:
+        return EARLY_BREAK_STRENGTH, "upside"
+    if trend == "bearish" and close_position <= 0.30 and live_price <= breakdown_level / EARLY_BREAK_PROXIMITY:
+        return EARLY_BREAK_STRENGTH, "downside"
+    return 0.0, "none"
+
+
+def _resolve_live_price(data: SignalContext, fallback: float) -> float:
+    for attr_name in ("live_price", "tick_price", "ltp", "last_price"):
+        value = getattr(data, attr_name, None)
+        try:
+            if value is not None and float(value) > 0:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return fallback
 
 
 def _score_setup(*conditions: bool) -> int:
@@ -174,6 +329,10 @@ def _empty_result(reason: str) -> dict[str, object]:
         "rsi": None,
         "breakout_level": None,
         "breakdown_level": None,
+        "live_price": None,
+        "break_strength": 0.0,
+        "break_type": "none",
+        "break_reason": reason,
         "close_position": None,
         "bullish_break": False,
         "bearish_break": False,
@@ -181,6 +340,8 @@ def _empty_result(reason: str) -> dict[str, object]:
         "momentum_ok": False,
         "volume_ok": False,
         "volume_ratio": None,
+        "bullish_break_distance": 0.0,
+        "bearish_break_distance": 0.0,
         "trend_strength": 0.0,
         "sideways": False,
     }

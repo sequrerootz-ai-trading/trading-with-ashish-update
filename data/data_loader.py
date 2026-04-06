@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from data.candle_store import Candle
-from data.database import TradingDatabase
+from data.database import TradingDatabase, normalize_market_timestamp
 from data.market_data import MarketDataService
 from strategy.strategy import MINIMUM_INDICATOR_CANDLES
 
@@ -51,13 +51,26 @@ class HistoricalDataLoader:
         try:
             cached = self.database.get_recent_candles(symbol=symbol, limit=MAX_STARTUP_CANDLES)
             cached = [candle for candle in cached if candle.end <= session_end]
-            if len(cached) >= MINIMUM_INDICATOR_CANDLES:
+            current_session_cached = [candle for candle in cached if candle.end >= session_start]
+            if len(cached) >= MINIMUM_INDICATOR_CANDLES and self._covers_session(
+                current_session_cached,
+                session_start=session_start,
+                session_end=session_end,
+                timeframe_minutes=timeframe_minutes,
+            ):
                 logger.info(
                     "Using cached historical candles for %s | count=%s",
                     symbol,
                     len(cached),
                 )
                 return cached[-MAX_STARTUP_CANDLES:]
+            if cached:
+                logger.info(
+                    "Cached candles for %s are incomplete for active session | cached=%s | session_cached=%s | refreshing history",
+                    symbol,
+                    len(cached),
+                    len(current_session_cached),
+                )
         except Exception as exc:
             logger.warning("Historical DB read failed for %s: %s", symbol, exc)
 
@@ -125,10 +138,16 @@ class HistoricalDataLoader:
         return results
 
     @staticmethod
-    def _covers_session(candles: list[Candle], session_end: datetime) -> bool:
-        if len(candles) < 2:
+    def _covers_session(
+        candles: list[Candle],
+        session_start: datetime,
+        session_end: datetime,
+        timeframe_minutes: int,
+    ) -> bool:
+        if len(candles) < MINIMUM_INDICATOR_CANDLES:
             return False
-        return candles[-1].end >= session_end
+        first_expected_close = session_start + timedelta(minutes=timeframe_minutes)
+        return candles[0].end <= first_expected_close and candles[-1].end >= session_end
 
 
 def session_window_ist(
@@ -152,7 +171,7 @@ def session_window_ist(
             microsecond=0,
         )
     last_completed_end = round_down_to_last_completed_interval(current_ist, timeframe_minutes)
-    return session_start.astimezone(UTC).replace(tzinfo=None), last_completed_end.astimezone(UTC).replace(tzinfo=None)
+    return session_start.replace(tzinfo=None), last_completed_end.replace(tzinfo=None)
 
 
 def history_window_start_ist(
@@ -177,9 +196,7 @@ def round_down_to_last_completed_interval(current_time: datetime, timeframe_minu
 
 
 def _row_to_candle(symbol: str, row: dict, timeframe_minutes: int) -> Candle:
-    end = row["date"]
-    if getattr(end, "tzinfo", None) is not None:
-        end = end.astimezone(UTC).replace(tzinfo=None)
+    end = normalize_market_timestamp(row["date"])
     start = end - timedelta(minutes=timeframe_minutes)
     return Candle(
         symbol=symbol,
