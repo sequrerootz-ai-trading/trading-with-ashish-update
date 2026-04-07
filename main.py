@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, time as dt_time, timedelta
 
 from utils_console import CYAN, GREEN, RED, YELLOW, colorize
+from api.websocket_manager import web_socket_manager
 from config import get_market_type, get_mode
 from config.settings import Settings, get_settings
 from data.candle_manager import CandleManager
@@ -103,6 +104,7 @@ def main() -> None:
     logging.info("[INFO] Processing SYMBOL: %s", symbol)
 
     market_data = MarketDataService(settings=settings)
+    web_socket_manager.register_market_data_service(market_data)
     database = TradingDatabase()
     RUNTIME_DATABASE = database
     candle_manager = CandleManager(max_candles=100)
@@ -193,6 +195,7 @@ def main() -> None:
         except Exception as exc:
             logging.warning("Failed to store signal in DB: %s", exc)
 
+        web_socket_manager.publish_signal(symbol, generated)
         _handle_generated_signal(symbol, market_type, generated, premium_service, mcx_option_chain_service, candle.close, trade_manager, order_manager, candle_manager)
 
     market_data.on_candle = handle_closed_candle
@@ -273,6 +276,7 @@ def _handle_generated_signal(symbol: str, market_type: str, generated_signal, pr
         if _mode_label() != "PAPER":
             _register_trade_plan(symbol, enriched_signal, premium, trade_manager, candle_manager, regime_snapshot)
         _print_signal(enriched_signal)
+        web_socket_manager.publish_signal(symbol, enriched_signal)
     elif generated_signal.signal == "BUY_PE":
         premium = _safe_premium_quote(premium_service, symbol, spot_price, "PUT")
         if premium is None:
@@ -295,6 +299,7 @@ def _handle_generated_signal(symbol: str, market_type: str, generated_signal, pr
         if _mode_label() != "PAPER":
             _register_trade_plan(symbol, enriched_signal, premium, trade_manager, candle_manager, regime_snapshot)
         _print_signal(enriched_signal)
+        web_socket_manager.publish_signal(symbol, enriched_signal)
     elif generated_signal.signal in {"BUY", "SELL"}:
         option_chain = mcx_option_chain_service.get_option_chain(symbol, spot_price)
         enriched_signal = enrich_mcx_signal_with_option(symbol, generated_signal, spot_price, option_chain)
@@ -314,7 +319,9 @@ def _handle_generated_signal(symbol: str, market_type: str, generated_signal, pr
                 logging.info("Skipping MCX trade plan print for %s because plan registration did not succeed.", symbol)
                 return
         _print_signal(enriched_signal)
+        web_socket_manager.publish_signal(symbol, enriched_signal)
     else:
+        web_socket_manager.publish_signal(symbol, generated_signal)
         _log_no_trade(symbol, generated_signal.reason)
 
 def _safe_premium_quote(premium_service, symbol: str, spot_price: float, signal: str):

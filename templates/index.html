@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Signal Monitor</title>
+  <style>
+    :root {
+      --bg: #f5efe6;
+      --panel: #fffaf3;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --accent: #0f766e;
+      --accent-soft: #d1fae5;
+      --danger: #b91c1c;
+      --danger-soft: #fee2e2;
+      --warn: #92400e;
+      --warn-soft: #fef3c7;
+      --line: #e5dccf;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: radial-gradient(circle at top, #fff8ee 0%, var(--bg) 58%, #eadcc8 100%);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    .shell { max-width: 1180px; margin: 0 auto; padding: 32px 20px 48px; }
+    .hero { display: grid; gap: 18px; margin-bottom: 24px; }
+    .hero h1 { margin: 0; font-size: clamp(2rem, 4vw, 3.3rem); line-height: 0.95; letter-spacing: -0.04em; }
+    .hero p { margin: 0; color: var(--muted); font-size: 1rem; }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+      background: rgba(255,255,255,0.72); border: 1px solid var(--line); border-radius: 18px; padding: 16px; backdrop-filter: blur(8px);
+    }
+    .field { display: grid; gap: 6px; }
+    .field label { font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    select {
+      min-width: 220px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fff; font-size: 1rem; color: var(--ink);
+    }
+    .timer { margin-left: auto; padding: 12px 16px; border-radius: 14px; background: #fff; border: 1px solid var(--line); min-width: 220px; }
+    .timer .label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
+    .timer .value { font-size: 1.4rem; margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px; }
+    .card {
+      background: rgba(255,255,255,0.82); border: 1px solid var(--line); border-radius: 22px; padding: 20px; box-shadow: 0 18px 30px rgba(88, 61, 29, 0.06); backdrop-filter: blur(10px);
+    }
+    .card h2 { margin: 0 0 14px; font-size: 1.1rem; letter-spacing: 0.02em; }
+    .signal-pill { display: inline-flex; align-items: center; gap: 10px; border-radius: 999px; padding: 10px 16px; font-weight: 700; font-size: 1rem; }
+    .signal-buy { background: var(--accent-soft); color: var(--accent); }
+    .signal-sell { background: #dbeafe; color: #1d4ed8; }
+    .signal-none { background: var(--warn-soft); color: var(--warn); }
+    .live-subtitle { margin-top: 12px; color: var(--muted); font-size: 0.96rem; }
+    .meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+    .metric { padding: 14px; border-radius: 14px; background: #fff; border: 1px solid var(--line); }
+    .metric .k { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; }
+    .metric .v { margin-top: 4px; font-size: 1.05rem; font-weight: 600; }
+    .reason { margin-top: 18px; padding: 16px; border-radius: 16px; background: #fff; border: 1px solid var(--line); line-height: 1.5; color: #3f3f46; }
+    .reason .label { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+    .last-signal-list { display: grid; gap: 12px; }
+    .last-item { border: 1px solid var(--line); background: #fff; border-radius: 16px; padding: 16px; }
+    .last-item .head { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .last-item .symbol { font-weight: 700; font-size: 1rem; }
+    .last-item .ts { color: var(--muted); font-size: 0.82rem; }
+    .last-item .small-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; font-size: 0.92rem; margin-top: 12px; }
+    .empty { color: var(--muted); padding: 18px 0; }
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: 1fr; }
+      .timer { margin-left: 0; width: 100%; }
+      .meta { grid-template-columns: 1fr; }
+      .last-item .small-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <h1>Live Signal Portal</h1>
+      <p>Signal updates stream live from the local trading runtime without reloading the page.</p>
+      <div class="toolbar">
+        <div class="field">
+          <label for="symbolSelect">Symbol</label>
+          <select id="symbolSelect">
+            {% for symbol in symbols %}
+            <option value="{{ symbol }}" {% if symbol == default_symbol %}selected{% endif %}>{{ symbol }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="timer">
+          <div class="label">Next Candle Close In</div>
+          <div class="value" id="timerValue">--:--</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Live Signal</h2>
+        <div id="currentSignalPill" class="signal-pill signal-none">WAITING</div>
+        <div id="currentSignalSubtitle" class="live-subtitle">Waiting for the first update.</div>
+        <div class="meta">
+          <div class="metric"><div class="k">Symbol</div><div class="v" id="symbolValue">--</div></div>
+          <div class="metric"><div class="k">Option</div><div class="v" id="optionValue">--</div></div>
+          <div class="metric"><div class="k">Expiry</div><div class="v" id="expiryValue">--</div></div>
+          <div class="metric"><div class="k">Entry</div><div class="v" id="entryValue">--</div></div>
+          <div class="metric"><div class="k">Target</div><div class="v" id="targetValue">--</div></div>
+          <div class="metric"><div class="k">Stoploss</div><div class="v" id="stoplossValue">--</div></div>
+          <div class="metric"><div class="k">Confidence</div><div class="v" id="confidenceValue">--</div></div>
+          <div class="metric"><div class="k">Score</div><div class="v" id="scoreValue">--</div></div>
+          <div class="metric"><div class="k">Timestamp</div><div class="v" id="timestampValue">--</div></div>
+        </div>
+        <div class="reason">
+          <div class="label" id="reasonLabel">Why</div>
+          <div id="reasonValue">Waiting for signal...</div>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Last Signal</h2>
+        <div id="lastSignalList" class="last-signal-list"></div>
+      </article>
+    </section>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

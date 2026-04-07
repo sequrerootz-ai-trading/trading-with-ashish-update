@@ -19,3 +19,8 @@ main.py  ✅ clean orchestrator
 
 
 reset cache run command .\reset.ps1
+
+python web_app.py
+
+http://192.168.1.4:8000
+
