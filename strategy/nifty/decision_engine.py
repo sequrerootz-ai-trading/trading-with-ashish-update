@@ -12,13 +12,18 @@ from strategy.common.signal_types import (
     ValidationItem,
 )
 
-
 BULLISH_RSI_RANGE = (55.0, 75.0)
 BEARISH_RSI_RANGE = (25.0, 45.0)
 OVERBOUGHT_RSI = 75.0
 OVERSOLD_RSI = 25.0
 
 
+# =========================
+# BLOCK 1: NIFTY Market Data and Final Decision
+# Responsibility: Process NIFTY candles, derive EMA trend, breakout, and final trade plan
+# Inputs: raw candle data
+# Outputs: GeneratedSignal with entry, target, stoploss, and option details
+# =========================
 def build_equity_decision(symbol: str, data: SignalContext) -> GeneratedSignal:
     if data.last_candle is None or len(data.candles) < 21:
         return GeneratedSignal(
@@ -82,7 +87,9 @@ def build_equity_decision(symbol: str, data: SignalContext) -> GeneratedSignal:
         ema_21=indicators.ema_21,
         rsi=indicators.rsi,
         trend=trend,
-        trend_strength_pct=_trend_strength_pct(indicators.ema_9, indicators.ema_21, current_candle.close),
+        trend_strength_pct=_trend_strength_pct(
+            indicators.ema_9, indicators.ema_21, current_candle.close
+        ),
         breakout_price=previous_candle.high,
         breakdown_price=previous_candle.low,
         volume_ratio=volume_ratio,
@@ -108,9 +115,15 @@ def build_equity_decision(symbol: str, data: SignalContext) -> GeneratedSignal:
             ),
         )
 
-    option_suggestion = select_option_strike(symbol, current_candle.close, str(validation["direction"]))
+    option_suggestion = select_option_strike(
+        symbol, current_candle.close, str(validation["direction"])
+    )
     premium_levels = calculate_premium_trade_levels(
-        option_suggestion.premium_ltp if option_suggestion.premium_ltp is not None else current_candle.close,
+        (
+            option_suggestion.premium_ltp
+            if option_suggestion.premium_ltp is not None
+            else current_candle.close
+        ),
         confidence_pct=confidence_pct,
     )
     option_suggestion = replace(
@@ -145,6 +158,12 @@ def build_equity_decision(symbol: str, data: SignalContext) -> GeneratedSignal:
     )
 
 
+# =========================
+# BLOCK 2: NIFTY Confidence Calculation
+# Responsibility: Score trend, breakout, momentum, and volume strength
+# Inputs: EMA, RSI, price structure, direction, risk flags
+# Outputs: confidence score
+# =========================
 def calculate_confidence(
     ema_9: float,
     ema_21: float,
@@ -168,14 +187,27 @@ def calculate_confidence(
         breakout_score = min(breakout_strength / breakout_reference, 1.0)
         rsi_score = _bearish_rsi_score(rsi)
 
-    volume_score = 0.5 if volume_ratio is None else min(max((volume_ratio - 0.8) / 0.7, 0.0), 1.0)
-    weighted_score = (trend_strength * 0.35) + (rsi_score * 0.25) + (breakout_score * 0.25) + (volume_score * 0.15)
+    volume_score = (
+        0.5 if volume_ratio is None else min(max((volume_ratio - 0.8) / 0.7, 0.0), 1.0)
+    )
+    weighted_score = (
+        (trend_strength * 0.35)
+        + (rsi_score * 0.25)
+        + (breakout_score * 0.25)
+        + (volume_score * 0.15)
+    )
     confidence = int(round(55 + (weighted_score * 35)))
     if is_risky:
         confidence -= 10
     return max(45, min(confidence, 92))
 
 
+# =========================
+# BLOCK 3: NIFTY Signal Validation
+# Responsibility: Validate breakout, trend, and RSI alignment
+# Inputs: EMA, RSI, current candle, previous high/low
+# Outputs: BUY_CE / BUY_PE / NO_TRADE decision payload
+# =========================
 def validate_signal(
     ema_9: float,
     ema_21: float,
@@ -186,8 +218,12 @@ def validate_signal(
     previous_high: float,
     previous_low: float,
 ) -> dict[str, object]:
-    bullish_breakout = current_high > previous_high and current_close >= previous_high * 0.999
-    bearish_breakout = current_low < previous_low and current_close <= previous_low * 1.001
+    bullish_breakout = (
+        current_high > previous_high and current_close >= previous_high * 0.999
+    )
+    bearish_breakout = (
+        current_low < previous_low and current_close <= previous_low * 1.001
+    )
     bullish_trend = ema_9 > ema_21
     bearish_trend = ema_9 < ema_21
     overbought = rsi > OVERBOUGHT_RSI
@@ -196,8 +232,14 @@ def validate_signal(
     bearish_rsi_healthy = BEARISH_RSI_RANGE[0] <= rsi <= BEARISH_RSI_RANGE[1]
 
     bullish_checks = [
-        ValidationItem("EMA Trend Confirmed", "pass" if bullish_trend else "fail", bullish_trend),
-        ValidationItem("Breakout Confirmed", "pass" if bullish_breakout else "fail", bullish_breakout),
+        ValidationItem(
+            "EMA Trend Confirmed", "pass" if bullish_trend else "fail", bullish_trend
+        ),
+        ValidationItem(
+            "Breakout Confirmed",
+            "pass" if bullish_breakout else "fail",
+            bullish_breakout,
+        ),
         ValidationItem(
             "RSI in healthy bullish zone",
             "pass" if bullish_rsi_healthy else ("warn" if overbought else "fail"),
@@ -205,8 +247,14 @@ def validate_signal(
         ),
     ]
     bearish_checks = [
-        ValidationItem("EMA Trend Confirmed", "pass" if bearish_trend else "fail", bearish_trend),
-        ValidationItem("Breakdown Confirmed", "pass" if bearish_breakout else "fail", bearish_breakout),
+        ValidationItem(
+            "EMA Trend Confirmed", "pass" if bearish_trend else "fail", bearish_trend
+        ),
+        ValidationItem(
+            "Breakdown Confirmed",
+            "pass" if bearish_breakout else "fail",
+            bearish_breakout,
+        ),
         ValidationItem(
             "RSI in healthy bearish zone",
             "pass" if bearish_rsi_healthy else ("warn" if oversold else "fail"),
@@ -273,12 +321,22 @@ def validate_signal(
         ),
         "summary": "Technical conditions are not aligned for a clean entry",
         "is_risky": False,
-        "rsi_state": "overbought" if overbought else ("oversold" if oversold else "normal"),
+        "rsi_state": (
+            "overbought" if overbought else ("oversold" if oversold else "normal")
+        ),
         "validations": bullish_checks if ema_9 >= ema_21 else bearish_checks,
     }
 
 
-def detect_market_condition(ema_9: float, ema_21: float, rsi: float, last_price: float) -> str:
+# =========================
+# BLOCK 4: NIFTY Market Condition
+# Responsibility: Classify market state from trend and RSI
+# Inputs: EMA values, RSI, last price
+# Outputs: market condition label
+# =========================
+def detect_market_condition(
+    ema_9: float, ema_21: float, rsi: float, last_price: float
+) -> str:
     strength = _trend_strength_pct(ema_9, ema_21, last_price)
     if ema_9 > ema_21:
         if rsi > OVERBOUGHT_RSI:
@@ -295,10 +353,22 @@ def detect_market_condition(ema_9: float, ema_21: float, rsi: float, last_price:
     return "range-bound"
 
 
-def select_option_strike(symbol: str, spot_price: float, direction: str) -> OptionSuggestion:
+# =========================
+# BLOCK 5: NIFTY Option Selection
+# Responsibility: Decide CE/PE and preferred strike context
+# Inputs: signal direction, spot price
+# Outputs: OptionSuggestion
+# =========================
+def select_option_strike(
+    symbol: str, spot_price: float, direction: str
+) -> OptionSuggestion:
     option_type = "CE" if direction == "bullish" else "PE"
     rounded_spot = int(round(spot_price)) if spot_price > 0 else None
-    label = f"ATM {option_type}" if rounded_spot is None else f"ATM / nearest {option_type} near {rounded_spot}"
+    label = (
+        f"ATM {option_type}"
+        if rounded_spot is None
+        else f"ATM / nearest {option_type} near {rounded_spot}"
+    )
     return OptionSuggestion(
         strike=None,
         option_type=option_type,
@@ -306,12 +376,20 @@ def select_option_strike(symbol: str, spot_price: float, direction: str) -> Opti
     )
 
 
+# =========================
+# BLOCK 6: NIFTY Trade Levels
+# Responsibility: Derive entry, stoploss, and target levels
+# Inputs: option LTP and confidence
+# Outputs: trade level map
+# =========================
 def calculate_entry_exit(option_ltp: float, confidence_pct: int) -> dict[str, float]:
     strength = _trade_strength_from_confidence(confidence_pct)
     return calculate_trade_levels(option_ltp, strength=strength)
 
 
-def calculate_premium_trade_levels(entry_price: float, confidence_pct: int) -> dict[str, float]:
+def calculate_premium_trade_levels(
+    entry_price: float, confidence_pct: int
+) -> dict[str, float]:
     if entry_price <= 0:
         raise ValueError("entry_price must be greater than 0")
 
@@ -362,8 +440,20 @@ def calculate_trade_levels(ltp: float, strength: str = "moderate") -> dict[str, 
     }
 
 
-def enrich_signal_with_premium(signal: GeneratedSignal, premium: PremiumQuote | None) -> GeneratedSignal:
-    if signal.details is None or signal.details.option_suggestion is None or premium is None:
+# =========================
+# BLOCK 7: NIFTY Premium Enrichment
+# Responsibility: Merge live premium quote into the generated signal
+# Inputs: generated signal, premium quote
+# Outputs: enriched signal
+# =========================
+def enrich_signal_with_premium(
+    signal: GeneratedSignal, premium: PremiumQuote | None
+) -> GeneratedSignal:
+    if (
+        signal.details is None
+        or signal.details.option_suggestion is None
+        or premium is None
+    ):
         return signal
 
     premium_levels = calculate_premium_trade_levels(
@@ -396,6 +486,12 @@ def enrich_signal_with_premium(signal: GeneratedSignal, premium: PremiumQuote | 
     )
 
 
+# =========================
+# BLOCK 8: NIFTY Output Formatting
+# Responsibility: Render a structured trade summary for logs/console
+# Inputs: generated signal
+# Outputs: formatted string
+# =========================
 def format_output(signal: GeneratedSignal) -> str:
     details = signal.details
     if details is None:
@@ -432,13 +528,22 @@ def format_output(signal: GeneratedSignal) -> str:
         lines.append(f"{_status_icon(item.status)} {item.label}")
 
     if option is not None:
-        lines.extend(["", "Option Trade Details:", f"Instrument   : {signal.symbol}", f"Strike       : {option.label}"])
+        lines.extend(
+            [
+                "",
+                "Option Trade Details:",
+                f"Instrument   : {signal.symbol}",
+                f"Strike       : {option.label}",
+            ]
+        )
         if option.trading_symbol:
             lines.append(f"Contract     : {option.trading_symbol}")
         if option.premium_ltp is not None:
             lines.append(f"Premium (LTP): {option.premium_ltp:.2f}")
         if option.entry_low is not None and option.entry_high is not None:
-            lines.append(f"Entry Price  : {option.entry_low:.2f} - {option.entry_high:.2f}")
+            lines.append(
+                f"Entry Price  : {option.entry_low:.2f} - {option.entry_high:.2f}"
+            )
         if option.stop_loss is not None:
             lines.append(f"Stop Loss    : {option.stop_loss:.2f}")
         if option.target is not None:
@@ -452,6 +557,12 @@ def print_signal(signal: GeneratedSignal) -> None:
     print(format_output(signal))
 
 
+# =========================
+# BLOCK 9: NIFTY Supporting Helpers
+# Responsibility: Provide reusable helper math and formatting
+# Inputs: internal helper values
+# Outputs: helper outputs
+# =========================
 def _trend_strength_pct(ema_9: float, ema_21: float, last_price: float) -> float:
     if last_price <= 0:
         return 0.0
@@ -582,5 +693,3 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
-
-

@@ -4,7 +4,6 @@ import calendar
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-
 STEP_SIZE_BY_INDEX = {
     "NIFTY": 50,
     "BANKNIFTY": 100,
@@ -50,7 +49,9 @@ def round_to_nearest_strike(index_name: str, index_price: float) -> int:
     return int(round(index_price / step_size) * step_size)
 
 
-def get_current_weekly_expiry(index_name: str, reference_date: date | None = None) -> date:
+def get_current_weekly_expiry(
+    index_name: str, reference_date: date | None = None
+) -> date:
     current_date = reference_date or date.today()
     normalized_index = index_name.upper()
     if normalized_index == "NIFTY":

@@ -16,12 +16,20 @@ def generate_signal(
     sentiment: dict[str, object] | None = None,
     max_trades_per_day: int = 10,
 ) -> GeneratedSignal:
-    normalized_market_type = str(market_type or get_symbol_config(symbol)["market"]).strip().upper()
+    normalized_market_type = (
+        str(market_type or get_symbol_config(symbol)["market"]).strip().upper()
+    )
     if normalized_market_type == "MCX":
-        return generate_mcx_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
+        return generate_mcx_signal_engine(
+            symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day
+        )
     if symbol.strip().upper() == "SENSEX":
-        return generate_sensex_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
-    return generate_equity_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
+        return generate_sensex_signal_engine(
+            symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day
+        )
+    return generate_equity_signal_engine(
+        symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day
+    )
 
 
 def get_last_closed_candle(symbol: str, database: TradingDatabase) -> Candle | None:
@@ -33,7 +41,9 @@ def store_market_data(data: Candle, database: TradingDatabase) -> bool:
 
 
 def store_signal(signal: GeneratedSignal, database: TradingDatabase) -> None:
-    database.store_signal(signal.symbol, signal.timestamp or "", signal.signal, signal.reason)
+    database.store_signal(
+        signal.symbol, signal.timestamp or "", signal.signal, signal.reason
+    )
 
 
 __all__ = [
@@ -42,8 +52,3 @@ __all__ = [
     "store_market_data",
     "store_signal",
 ]
-
-
-
-
-

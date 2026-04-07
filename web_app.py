@@ -13,7 +13,6 @@ from api.routes import router
 from api.websocket_manager import web_socket_manager
 from main import main as trading_main
 
-
 app = FastAPI(title="Trading Web UI")
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -40,7 +39,9 @@ def _local_ip() -> str:
 
 
 def _run_web_server() -> None:
-    config = uvicorn.Config(app, host=WEB_HOST, port=WEB_PORT, reload=False, log_level="info")
+    config = uvicorn.Config(
+        app, host=WEB_HOST, port=WEB_PORT, reload=False, log_level="info"
+    )
     server = ThreadedUvicornServer(config)
     server.run()
 
@@ -55,7 +56,9 @@ if __name__ == "__main__":
     lan_ip = _local_ip()
     print(f"Web UI Local: http://127.0.0.1:{WEB_PORT}")
     print(f"Web UI Mobile: http://{lan_ip}:{WEB_PORT}")
-    server_thread = threading.Thread(target=_run_web_server, daemon=True, name="web-ui-server")
+    server_thread = threading.Thread(
+        target=_run_web_server, daemon=True, name="web-ui-server"
+    )
     server_thread.start()
     time.sleep(1)
     trading_main()

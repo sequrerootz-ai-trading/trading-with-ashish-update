@@ -22,15 +22,24 @@ def _adjusted_entry_price(active_trade: ActiveTrade, current_price: float) -> fl
     return _root_module()._adjusted_entry_price(active_trade, current_price)
 
 
-def _compute_entry_quantity(order_manager: OrderManager, active_trade: ActiveTrade, execution_price: float, market_type: str) -> int:
-    return _root_module()._compute_entry_quantity(order_manager, active_trade, execution_price, market_type)
+def _compute_entry_quantity(
+    order_manager: OrderManager,
+    active_trade: ActiveTrade,
+    execution_price: float,
+    market_type: str,
+) -> int:
+    return _root_module()._compute_entry_quantity(
+        order_manager, active_trade, execution_price, market_type
+    )
 
 
 def _extract_order_price(order: dict[str, object], fallback_price: float) -> float:
     return _root_module()._extract_order_price(order, fallback_price)
 
 
-def _record_trade_result(active_trade: ActiveTrade, exit_price: float, market_type: str) -> None:
+def _record_trade_result(
+    active_trade: ActiveTrade, exit_price: float, market_type: str
+) -> None:
     return _root_module()._record_trade_result(active_trade, exit_price, market_type)
 
 
@@ -46,12 +55,18 @@ def _safe_exit_position(
     reason: str = "manual_exit",
 ):
     try:
-        exit_quantity = quantity or active_trade.remaining_quantity or active_trade.quantity
+        exit_quantity = (
+            quantity or active_trade.remaining_quantity or active_trade.quantity
+        )
         if order_manager.mode == "LIVE" and active_trade.stop_loss_order_id:
             try:
                 order_manager.cancel_order(active_trade.stop_loss_order_id)
             except Exception as exc:
-                logging.warning("Unable to cancel stop-loss order for %s before exit: %s", active_trade.trading_symbol, exc)
+                logging.warning(
+                    "Unable to cancel stop-loss order for %s before exit: %s",
+                    active_trade.trading_symbol,
+                    exc,
+                )
         return order_manager.exit_position(
             trading_symbol=active_trade.trading_symbol,
             exchange=active_trade.exchange,
@@ -65,7 +80,14 @@ def _safe_exit_position(
         return None
 
 
-def _try_execute_entry_if_needed(symbol: str, active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager, market_type: str) -> ActiveTrade | None:
+def _try_execute_entry_if_needed(
+    symbol: str,
+    active_trade: ActiveTrade,
+    current_price: float,
+    trade_manager: TradeManager,
+    order_manager: OrderManager,
+    market_type: str,
+) -> ActiveTrade | None:
     latest_trade = trade_manager.get_active_trade(symbol) or active_trade
     if latest_trade.order_placed or latest_trade.status != "PENDING_ENTRY":
         return latest_trade
@@ -74,7 +96,9 @@ def _try_execute_entry_if_needed(symbol: str, active_trade: ActiveTrade, current
 
     try:
         execution_price = _adjusted_entry_price(latest_trade, current_price)
-        quantity = _compute_entry_quantity(order_manager, latest_trade, execution_price, market_type)
+        quantity = _compute_entry_quantity(
+            order_manager, latest_trade, execution_price, market_type
+        )
         managed_order = order_manager.place_market_buy(
             trading_symbol=latest_trade.trading_symbol,
             exchange=latest_trade.exchange,
@@ -108,15 +132,28 @@ def _try_execute_entry_if_needed(symbol: str, active_trade: ActiveTrade, current
         return None
 
 
-def _handle_live_stop_loss_completion(symbol: str, active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager, market_type: str) -> bool:
+def _handle_live_stop_loss_completion(
+    symbol: str,
+    active_trade: ActiveTrade,
+    current_price: float,
+    trade_manager: TradeManager,
+    order_manager: OrderManager,
+    market_type: str,
+) -> bool:
     if order_manager.mode != "LIVE" or not active_trade.stop_loss_order_id:
         return False
 
     try:
         stop_order = order_manager.check_order_status(active_trade.stop_loss_order_id)
     except Exception as exc:
-        logging.warning("Unable to check stop-loss order status for %s: %s", active_trade.trading_symbol, exc)
-        _print_order_error(f"Could not verify stop-loss order for {active_trade.trading_symbol}: {exc}")
+        logging.warning(
+            "Unable to check stop-loss order status for %s: %s",
+            active_trade.trading_symbol,
+            exc,
+        )
+        _print_order_error(
+            f"Could not verify stop-loss order for {active_trade.trading_symbol}: {exc}"
+        )
         return False
 
     stop_status = str(stop_order.get("status", "UNKNOWN")).upper()
@@ -132,19 +169,34 @@ def _handle_live_stop_loss_completion(symbol: str, active_trade: ActiveTrade, cu
             reason="stop_loss_hit",
             order_id=active_trade.stop_loss_order_id,
         )
-        closed_trade = trade_manager.close_active_trade(symbol, "stop_loss_hit", exit_price)
+        closed_trade = trade_manager.close_active_trade(
+            symbol, "stop_loss_hit", exit_price
+        )
         if closed_trade is not None:
             _record_trade_result(closed_trade, exit_price, market_type)
             _print_stop_loss_hit(closed_trade, exit_price)
         return True
 
-    if stop_status in {"REJECTED", "CANCELLED"} and current_price <= active_trade.stop_loss:
-        _print_order_error(f"Stop-loss order {stop_status.lower()} for {active_trade.trading_symbol}. Exiting at market.")
-        exit_order = _safe_exit_position(active_trade, current_price, order_manager, quantity=active_trade.remaining_quantity or active_trade.quantity, reason="emergency_stop_loss_exit")
+    if (
+        stop_status in {"REJECTED", "CANCELLED"}
+        and current_price <= active_trade.stop_loss
+    ):
+        _print_order_error(
+            f"Stop-loss order {stop_status.lower()} for {active_trade.trading_symbol}. Exiting at market."
+        )
+        exit_order = _safe_exit_position(
+            active_trade,
+            current_price,
+            order_manager,
+            quantity=active_trade.remaining_quantity or active_trade.quantity,
+            reason="emergency_stop_loss_exit",
+        )
         if exit_order is None:
             return True
         exit_price = _extract_order_price(exit_order, current_price)
-        closed_trade = trade_manager.close_active_trade(symbol, "emergency_stop_loss_exit", exit_price)
+        closed_trade = trade_manager.close_active_trade(
+            symbol, "emergency_stop_loss_exit", exit_price
+        )
         if closed_trade is not None:
             _record_trade_result(closed_trade, exit_price, market_type)
             _print_stop_loss_hit(closed_trade, exit_price)
@@ -153,7 +205,13 @@ def _handle_live_stop_loss_completion(symbol: str, active_trade: ActiveTrade, cu
     return False
 
 
-def _trail_active_trade_if_needed(active_trade: ActiveTrade, current_price: float, trade_manager: TradeManager, order_manager: OrderManager, latest_candle=None) -> ActiveTrade | None:
+def _trail_active_trade_if_needed(
+    active_trade: ActiveTrade,
+    current_price: float,
+    trade_manager: TradeManager,
+    order_manager: OrderManager,
+    latest_candle=None,
+) -> ActiveTrade | None:
     entry_price = active_trade.entry_price
     if entry_price is None or active_trade.quantity <= 0:
         return active_trade
@@ -174,17 +232,25 @@ def _trail_active_trade_if_needed(active_trade: ActiveTrade, current_price: floa
     if settings.trailing_mode == "FIXED_STEP":
         trailing_candidate = highest_price * (1.0 - settings.fixed_trail_step_pct)
     else:
-        trailing_buffer = max(highest_price * settings.trailing_buffer_pct, initial_risk * settings.trailing_rr_lock_step)
+        trailing_buffer = max(
+            highest_price * settings.trailing_buffer_pct,
+            initial_risk * settings.trailing_rr_lock_step,
+        )
         trailing_candidate = highest_price - trailing_buffer
 
     new_stop_loss = max(active_trade.stop_loss, locked_stop, trailing_candidate)
     new_stop_loss = min(new_stop_loss, current_price * 0.995)
 
-    if highest_price <= (active_trade.highest_price or entry_price) and new_stop_loss <= active_trade.stop_loss:
+    if (
+        highest_price <= (active_trade.highest_price or entry_price)
+        and new_stop_loss <= active_trade.stop_loss
+    ):
         return active_trade
 
     if new_stop_loss <= active_trade.stop_loss:
-        return trade_manager.update_active_trade(symbol=active_trade.symbol, highest_price=highest_price)
+        return trade_manager.update_active_trade(
+            symbol=active_trade.symbol, highest_price=highest_price
+        )
 
     broker_stop_loss = new_stop_loss
     if order_manager.mode == "LIVE" and active_trade.stop_loss_order_id:
@@ -198,9 +264,15 @@ def _trail_active_trade_if_needed(active_trade: ActiveTrade, current_price: floa
                 new_stop_loss_price=new_stop_loss,
             )
         except Exception as exc:
-            logging.exception("Failed to trail stop for %s", active_trade.trading_symbol)
-            _print_order_error(f"Stop-loss modify failed for {active_trade.trading_symbol}: {exc}")
-            return trade_manager.update_active_trade(symbol=active_trade.symbol, highest_price=highest_price)
+            logging.exception(
+                "Failed to trail stop for %s", active_trade.trading_symbol
+            )
+            _print_order_error(
+                f"Stop-loss modify failed for {active_trade.trading_symbol}: {exc}"
+            )
+            return trade_manager.update_active_trade(
+                symbol=active_trade.symbol, highest_price=highest_price
+            )
 
     updated = trade_manager.update_active_trade(
         symbol=active_trade.symbol,

@@ -5,7 +5,6 @@ from datetime import date, datetime
 
 from kiteconnect import KiteConnect
 
-
 logger = logging.getLogger(__name__)
 MCX_OPTION_SEGMENT = "MCX-OPT"
 MCX_EXCHANGE = "MCX"
@@ -37,12 +36,16 @@ class McxOptionChainService:
             if (now - cached_at).total_seconds() <= CACHE_TTL_SECONDS:
                 return list(cached_chain)
 
-        contracts = self._select_contracts(normalized_symbol, spot_price, requested_date)
+        contracts = self._select_contracts(
+            normalized_symbol, spot_price, requested_date
+        )
         if not contracts:
             logger.info("[OPTION_CHAIN] %s | Data not available", normalized_symbol)
             return []
 
-        exchange_symbols = [f"{row['exchange']}:{row['tradingsymbol']}" for row in contracts]
+        exchange_symbols = [
+            f"{row['exchange']}:{row['tradingsymbol']}" for row in contracts
+        ]
         quotes = self._fetch_quotes(exchange_symbols)
 
         option_chain: list[dict] = []
@@ -70,7 +73,8 @@ class McxOptionChainService:
                     "change": quote.get("net_change") or quote.get("change"),
                     "volume": float(quote.get("volume") or 0.0),
                     "oi": float(quote.get("oi") or 0.0),
-                    "oi_change": float(quote.get("oi_day_high") or 0.0) - float(quote.get("oi_day_low") or 0.0),
+                    "oi_change": float(quote.get("oi_day_high") or 0.0)
+                    - float(quote.get("oi_day_low") or 0.0),
                     "bid": best_bid,
                     "ask": best_ask,
                     "high": ohlc.get("high"),
@@ -78,17 +82,29 @@ class McxOptionChainService:
                     "open": ohlc.get("open"),
                     "tradingsymbol": str(contract.get("tradingsymbol") or ""),
                     "exchange": str(contract.get("exchange") or MCX_EXCHANGE),
-                    "expiry": contract.get("expiry").isoformat() if contract.get("expiry") is not None else None,
+                    "expiry": (
+                        contract.get("expiry").isoformat()
+                        if contract.get("expiry") is not None
+                        else None
+                    ),
                 }
             )
 
         if option_chain:
             selected_expiry = option_chain[0].get("expiry")
-            logger.info("[OPTION_CHAIN] %s | Expiry=%s | ATM=%s | Contracts=%s", normalized_symbol, selected_expiry or "NA", atm_strike, len(option_chain))
+            logger.info(
+                "[OPTION_CHAIN] %s | Expiry=%s | ATM=%s | Contracts=%s",
+                normalized_symbol,
+                selected_expiry or "NA",
+                atm_strike,
+                len(option_chain),
+            )
         self._chain_cache[cache_key] = (now, option_chain)
         return list(option_chain)
 
-    def _select_contracts(self, symbol: str, spot_price: float, reference_date: date) -> list[dict]:
+    def _select_contracts(
+        self, symbol: str, spot_price: float, reference_date: date
+    ) -> list[dict]:
         instruments = self._load_instruments(reference_date)
         candidates = [
             row
@@ -102,7 +118,9 @@ class McxOptionChainService:
         if not candidates:
             return []
 
-        valid_expiries = sorted({row["expiry"] for row in candidates if row["expiry"] >= reference_date})
+        valid_expiries = sorted(
+            {row["expiry"] for row in candidates if row["expiry"] >= reference_date}
+        )
         if not valid_expiries:
             valid_expiries = sorted({row["expiry"] for row in candidates})
         if not valid_expiries:
@@ -111,18 +129,26 @@ class McxOptionChainService:
         expiry = valid_expiries[0]
         expiry_candidates = [row for row in candidates if row.get("expiry") == expiry]
         atm_strike = int(round(float(spot_price) / STRIKE_STEP) * STRIKE_STEP)
-        preferred_strikes = {atm_strike - STRIKE_STEP, atm_strike, atm_strike + STRIKE_STEP}
+        preferred_strikes = {
+            atm_strike - STRIKE_STEP,
+            atm_strike,
+            atm_strike + STRIKE_STEP,
+        }
         selected = [
             row
             for row in expiry_candidates
-            if _normalized_option_strike(row) is not None and int(round(_normalized_option_strike(row) or 0.0)) in preferred_strikes
+            if _normalized_option_strike(row) is not None
+            and int(round(_normalized_option_strike(row) or 0.0)) in preferred_strikes
         ]
         if selected:
             return selected
         return expiry_candidates
 
     def _load_instruments(self, reference_date: date) -> list[dict]:
-        if self._instrument_cache is None or self._instrument_cache_date != reference_date:
+        if (
+            self._instrument_cache is None
+            or self._instrument_cache_date != reference_date
+        ):
             self._instrument_cache = self.kite.instruments(exchange=MCX_EXCHANGE)
             self._instrument_cache_date = reference_date
         return self._instrument_cache

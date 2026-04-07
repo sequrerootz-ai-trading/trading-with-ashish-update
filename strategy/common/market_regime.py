@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from data.candle_store import Candle
-from strategy.common.indicators import calculate_adx, calculate_atr, calculate_vwap, calculate_volume_average
+from strategy.common.indicators import (
+    calculate_adx,
+    calculate_atr,
+    calculate_vwap,
+    calculate_volume_average,
+)
 
 
 @dataclass(frozen=True)
@@ -44,7 +49,11 @@ def detect_market_regime(
         value = calculate_atr(candles[:index], period=14)
         if value is not None:
             recent_atrs.append(value)
-    atr_average = (sum(recent_atrs[-10:]) / min(len(recent_atrs[-10:]), 10)) if recent_atrs else None
+    atr_average = (
+        (sum(recent_atrs[-10:]) / min(len(recent_atrs[-10:]), 10))
+        if recent_atrs
+        else None
+    )
 
     recent_window = candles[-20:]
     highest_high = max(candle.high for candle in recent_window)
@@ -54,7 +63,11 @@ def detect_market_regime(
     tight_range = range_pct <= range_compression_threshold_pct
 
     regime = "TRENDING"
-    if atr is not None and atr_average is not None and atr > (atr_average * atr_spike_multiplier):
+    if (
+        atr is not None
+        and atr_average is not None
+        and atr > (atr_average * atr_spike_multiplier)
+    ):
         regime = "VOLATILE"
     elif adx is not None and adx < adx_sideways_threshold and tight_range:
         regime = "SIDEWAYS"
@@ -63,7 +76,11 @@ def detect_market_regime(
 
     avg_volume = calculate_volume_average(candles)
     current_volume = float(candles[-1].volume or 0)
-    volume_spike_ratio = None if not avg_volume or avg_volume <= 0 else round(current_volume / avg_volume, 2)
+    volume_spike_ratio = (
+        None
+        if not avg_volume or avg_volume <= 0
+        else round(current_volume / avg_volume, 2)
+    )
 
     return MarketRegimeSnapshot(
         regime=regime,
@@ -75,4 +92,3 @@ def detect_market_regime(
         avg_volume=avg_volume,
         volume_spike_ratio=volume_spike_ratio,
     )
-

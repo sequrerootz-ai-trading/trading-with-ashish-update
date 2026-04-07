@@ -7,7 +7,6 @@ from data.candle_manager import CandleManager
 from strategy.common.signal_engine import generate_signal
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 
-
 logger = logging.getLogger(__name__)
 MINIMUM_INDICATOR_CANDLES = 21
 
@@ -41,10 +40,17 @@ class LastClosedCandleStrategy:
         candles = self.candle_manager.get_closed_candles(self.symbol)
         last_completed = self.candle_manager.get_last_completed_candle(self.symbol)
         if last_completed is None:
-            logger.warning("[INFO] Processing SYMBOL: %s | Waiting for sufficient data | no closed candle", self.symbol)
+            logger.warning(
+                "[INFO] Processing SYMBOL: %s | Waiting for sufficient data | no closed candle",
+                self.symbol,
+            )
             return None
 
-        live_price = self.live_price_getter(self.symbol) if self.live_price_getter is not None else None
+        live_price = (
+            self.live_price_getter(self.symbol)
+            if self.live_price_getter is not None
+            else None
+        )
 
         return generate_signal(
             self.symbol,
@@ -59,5 +65,3 @@ class LastClosedCandleStrategy:
             ),
             sentiment,
         )
-
-

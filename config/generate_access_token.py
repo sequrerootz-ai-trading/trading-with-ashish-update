@@ -6,7 +6,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_CANDIDATES = [
     BASE_DIR / ".env",

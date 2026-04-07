@@ -4,6 +4,12 @@ from strategy.common.signal_types import GeneratedSignal, SignalContext
 from strategy.sensex.strategy import generate_sensex_signal
 
 
+# =========================
+# BLOCK 1: SENSEX Signal Engine
+# Responsibility: Orchestrate SENSEX strategy generation
+# Inputs: symbol, data, sentiment
+# Outputs: final GeneratedSignal
+# =========================
 def generate_sensex_signal_engine(
     symbol: str,
     data: SignalContext,

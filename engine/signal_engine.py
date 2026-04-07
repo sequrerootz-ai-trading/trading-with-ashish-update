@@ -4,7 +4,6 @@ from strategy.common.indicators import calculate_indicators, detect_trend
 from strategy.common.signal_types import SignalContext
 from utils.calculations import compute_close_position, compute_volume_ratio
 
-
 LOOKBACK_CANDLES = 5
 MIN_REQUIRED_CANDLES = 8
 FAST_TIMEFRAME_MINUTES = 3
@@ -44,15 +43,20 @@ def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
     current_low = float(current_candle.low)
     price = max(current_close, 0.01)
 
-    recent_window = data.candles[-(LOOKBACK_CANDLES + 1):-1]
+    recent_window = data.candles[-(LOOKBACK_CANDLES + 1) : -1]
     breakout_level = max(float(candle.high) for candle in recent_window)
     breakdown_level = min(float(candle.low) for candle in recent_window)
     close_position = compute_close_position(current_high, current_low, current_close)
 
-    recent_ranges = [max(float(candle.high) - float(candle.low), 0.0) for candle in data.candles[-6:-1]]
+    recent_ranges = [
+        max(float(candle.high) - float(candle.low), 0.0)
+        for candle in data.candles[-6:-1]
+    ]
     avg_range = (sum(recent_ranges) / len(recent_ranges)) if recent_ranges else 0.0
     current_range = max(current_high - current_low, 0.0)
-    volatility_ok = current_range >= avg_range * MIN_VOLATILITY_FACTOR if avg_range > 0 else True
+    volatility_ok = (
+        current_range >= avg_range * MIN_VOLATILITY_FACTOR if avg_range > 0 else True
+    )
 
     momentum = abs(current_close - float(previous_candle.close))
     previous_momentum = abs(float(previous_candle.close) - float(prev_reference.close))
@@ -62,13 +66,21 @@ def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
     volume_ok = True if volume_ratio is None else volume_ratio >= MIN_VOLUME_RATIO
 
     fast_timeframe = data.timeframe_minutes <= FAST_TIMEFRAME_MINUTES
-    buy_close_threshold = FAST_BUY_CLOSE_POSITION if fast_timeframe else SLOW_BUY_CLOSE_POSITION
-    sell_close_threshold = FAST_SELL_CLOSE_POSITION if fast_timeframe else SLOW_SELL_CLOSE_POSITION
+    buy_close_threshold = (
+        FAST_BUY_CLOSE_POSITION if fast_timeframe else SLOW_BUY_CLOSE_POSITION
+    )
+    sell_close_threshold = (
+        FAST_SELL_CLOSE_POSITION if fast_timeframe else SLOW_SELL_CLOSE_POSITION
+    )
     strong_close_buy = close_position > buy_close_threshold
     strong_close_sell = close_position < sell_close_threshold
 
-    bullish_score = _score_setup(volatility_ok, momentum_ok, volume_ok, strong_close_buy)
-    bearish_score = _score_setup(volatility_ok, momentum_ok, volume_ok, strong_close_sell)
+    bullish_score = _score_setup(
+        volatility_ok, momentum_ok, volume_ok, strong_close_buy
+    )
+    bearish_score = _score_setup(
+        volatility_ok, momentum_ok, volume_ok, strong_close_sell
+    )
 
     if trend == "bullish":
         bullish_score += 1
@@ -105,14 +117,30 @@ def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
     stop_loss = None
 
     if not sideways:
-        if bullish_break and bullish_score >= MIN_SCORE_TO_TRIGGER and bullish_score >= bearish_score:
+        if (
+            bullish_break
+            and bullish_score >= MIN_SCORE_TO_TRIGGER
+            and bullish_score >= bearish_score
+        ):
             signal = "CALL"
-            entry_price, target, stop_loss = _build_trade_levels(current_close, current_range, "CALL")
-            reason = _build_reason("CALL", volatility_ok, momentum_ok, volume_ok, strong_close_buy)
-        elif bearish_break and bearish_score >= MIN_SCORE_TO_TRIGGER and bearish_score >= bullish_score:
+            entry_price, target, stop_loss = _build_trade_levels(
+                current_close, current_range, "CALL"
+            )
+            reason = _build_reason(
+                "CALL", volatility_ok, momentum_ok, volume_ok, strong_close_buy
+            )
+        elif (
+            bearish_break
+            and bearish_score >= MIN_SCORE_TO_TRIGGER
+            and bearish_score >= bullish_score
+        ):
             signal = "PUT"
-            entry_price, target, stop_loss = _build_trade_levels(current_close, current_range, "PUT")
-            reason = _build_reason("PUT", volatility_ok, momentum_ok, volume_ok, strong_close_sell)
+            entry_price, target, stop_loss = _build_trade_levels(
+                current_close, current_range, "PUT"
+            )
+            reason = _build_reason(
+                "PUT", volatility_ok, momentum_ok, volume_ok, strong_close_sell
+            )
         else:
             reason = "Breakout conditions not strong enough"
     else:
@@ -171,11 +199,21 @@ def calculate_break_strength(
 
     bullish_cross = live_price > breakout_level or current_high > breakout_level
     bearish_cross = live_price < breakdown_level or current_low < breakdown_level
-    bullish_break_distance = max(live_price - breakout_level, current_high - breakout_level, 0.0)
-    bearish_break_distance = max(breakdown_level - live_price, breakdown_level - current_low, 0.0)
+    bullish_break_distance = max(
+        live_price - breakout_level, current_high - breakout_level, 0.0
+    )
+    bearish_break_distance = max(
+        breakdown_level - live_price, breakdown_level - current_low, 0.0
+    )
 
-    bullish_sustain = live_price >= breakout_level + (min_move * 0.5) or current_close >= breakout_level
-    bearish_sustain = live_price <= breakdown_level - (min_move * 0.5) or current_close <= breakdown_level
+    bullish_sustain = (
+        live_price >= breakout_level + (min_move * 0.5)
+        or current_close >= breakout_level
+    )
+    bearish_sustain = (
+        live_price <= breakdown_level - (min_move * 0.5)
+        or current_close <= breakdown_level
+    )
 
     upside_strength = 0.0
     downside_strength = 0.0
@@ -188,7 +226,10 @@ def calculate_break_strength(
         elif not bullish_sustain:
             break_reason = "upside_not_sustained"
         else:
-            upside_strength = min(bullish_break_distance / max(breakout_level, 0.01), MAX_NORMALIZED_BREAK_STRENGTH)
+            upside_strength = min(
+                bullish_break_distance / max(breakout_level, 0.01),
+                MAX_NORMALIZED_BREAK_STRENGTH,
+            )
             break_type = "upside"
             break_reason = "live_breakout"
 
@@ -200,15 +241,22 @@ def calculate_break_strength(
             if break_type == "none":
                 break_reason = "downside_not_sustained"
         elif downside_strength == 0.0:
-            downside_strength = min(bearish_break_distance / max(breakdown_level, 0.01), MAX_NORMALIZED_BREAK_STRENGTH)
+            downside_strength = min(
+                bearish_break_distance / max(breakdown_level, 0.01),
+                MAX_NORMALIZED_BREAK_STRENGTH,
+            )
             if downside_strength >= upside_strength:
                 break_type = "downside"
                 break_reason = "live_breakdown"
 
     if break_type == "upside" and upside_strength > 0.0:
-        upside_strength = _boost_break_strength(upside_strength, volume_ok=volume_ok, momentum_ok=momentum_ok)
+        upside_strength = _boost_break_strength(
+            upside_strength, volume_ok=volume_ok, momentum_ok=momentum_ok
+        )
     elif break_type == "downside" and downside_strength > 0.0:
-        downside_strength = _boost_break_strength(downside_strength, volume_ok=volume_ok, momentum_ok=momentum_ok)
+        downside_strength = _boost_break_strength(
+            downside_strength, volume_ok=volume_ok, momentum_ok=momentum_ok
+        )
     else:
         early_break_strength, early_break_type = _early_break_strength(
             live_price=live_price,
@@ -226,16 +274,26 @@ def calculate_break_strength(
             else:
                 downside_strength = early_break_strength
 
-    break_strength = upside_strength if break_type == "upside" else downside_strength if break_type == "downside" else 0.0
+    break_strength = (
+        upside_strength
+        if break_type == "upside"
+        else downside_strength if break_type == "downside" else 0.0
+    )
     confirmed_break = break_reason.startswith("live_break")
     bullish_break = break_type == "upside" and break_strength > 0.0 and confirmed_break
-    bearish_break = break_type == "downside" and break_strength > 0.0 and confirmed_break
+    bearish_break = (
+        break_type == "downside" and break_strength > 0.0 and confirmed_break
+    )
 
     return {
         "live_price": round(live_price, 2),
         "break_strength": round(min(max(break_strength, 0.0), 1.0), 4),
         "break_type": break_type,
-        "break_reason": break_reason if break_strength == 0.0 else f"{break_reason}|strength={break_strength:.4f}",
+        "break_reason": (
+            break_reason
+            if break_strength == 0.0
+            else f"{break_reason}|strength={break_strength:.4f}"
+        ),
         "bullish_break": bullish_break,
         "bearish_break": bearish_break,
         "bullish_break_distance": round(bullish_break_distance, 2),
@@ -243,7 +301,9 @@ def calculate_break_strength(
     }
 
 
-def _boost_break_strength(base_strength: float, *, volume_ok: bool, momentum_ok: bool) -> float:
+def _boost_break_strength(
+    base_strength: float, *, volume_ok: bool, momentum_ok: bool
+) -> float:
     boosted_strength = base_strength
     if volume_ok:
         boosted_strength += 0.08
@@ -266,9 +326,17 @@ def _early_break_strength(
     if not trend_is_strong:
         return 0.0, "none"
 
-    if trend == "bullish" and close_position >= 0.70 and live_price >= breakout_level * EARLY_BREAK_PROXIMITY:
+    if (
+        trend == "bullish"
+        and close_position >= 0.70
+        and live_price >= breakout_level * EARLY_BREAK_PROXIMITY
+    ):
         return EARLY_BREAK_STRENGTH, "upside"
-    if trend == "bearish" and close_position <= 0.30 and live_price <= breakdown_level / EARLY_BREAK_PROXIMITY:
+    if (
+        trend == "bearish"
+        and close_position <= 0.30
+        and live_price <= breakdown_level / EARLY_BREAK_PROXIMITY
+    ):
         return EARLY_BREAK_STRENGTH, "downside"
     return 0.0, "none"
 
@@ -288,7 +356,9 @@ def _score_setup(*conditions: bool) -> int:
     return sum(1 for condition in conditions if condition)
 
 
-def _build_trade_levels(close_price: float, candle_range: float, signal: str) -> tuple[float, float, float]:
+def _build_trade_levels(
+    close_price: float, candle_range: float, signal: str
+) -> tuple[float, float, float]:
     effective_risk = max(candle_range, max(close_price * 0.0015, 0.5))
     if signal == "CALL":
         target = close_price + (effective_risk * TARGET_RISK_MULTIPLIER)
@@ -299,7 +369,13 @@ def _build_trade_levels(close_price: float, candle_range: float, signal: str) ->
     return round(close_price, 2), round(target, 2), round(stop_loss, 2)
 
 
-def _build_reason(signal: str, volatility_ok: bool, momentum_ok: bool, volume_ok: bool, candle_strength_ok: bool) -> str:
+def _build_reason(
+    signal: str,
+    volatility_ok: bool,
+    momentum_ok: bool,
+    volume_ok: bool,
+    candle_strength_ok: bool,
+) -> str:
     direction_text = "Breakout" if signal == "CALL" else "Breakdown"
     confirmations: list[str] = []
     if momentum_ok:
@@ -345,5 +421,3 @@ def _empty_result(reason: str) -> dict[str, object]:
         "trend_strength": 0.0,
         "sideways": False,
     }
-
-

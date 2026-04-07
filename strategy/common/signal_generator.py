@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 TECHNICAL_TO_SENTIMENT = {
     "CALL": "bullish",
     "PUT": "bearish",

@@ -15,7 +15,10 @@ from strategy.common.signal_engine import (
     store_signal,
 )
 from strategy.common.signal_generator import FinalSignal, generate_final_signal
-from strategy.nifty.option_helper import generate_nifty_hybrid_signal, generate_nifty_options_signal
+from strategy.nifty.option_helper import (
+    generate_nifty_hybrid_signal,
+    generate_nifty_options_signal,
+)
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 from strategy.strategy import LastClosedCandleStrategy
 from strategy.nifty.strategy import generate_equity_signal
@@ -43,14 +46,3 @@ __all__ = [
     "store_market_data",
     "store_signal",
 ]
-
-
-
-
-
-
-
-
-
-
-

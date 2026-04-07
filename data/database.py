@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 
 from data.candle_store import Candle
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = BASE_DIR / "trading_system.db"
 IST = ZoneInfo("Asia/Kolkata")
@@ -39,8 +38,7 @@ class TradingDatabase:
         self.connection.execute("PRAGMA busy_timeout=5000")
 
     def _create_tables(self) -> None:
-        self.connection.executescript(
-            """
+        self.connection.executescript("""
             CREATE TABLE IF NOT EXISTS market_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL,
@@ -95,8 +93,7 @@ class TradingDatabase:
                 duration_minutes REAL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            """
-        )
+            """)
         self.connection.commit()
 
     def store_market_data(self, candle: Candle) -> bool:
@@ -165,7 +162,9 @@ class TradingDatabase:
         ).fetchall()
         return [self._row_to_candle(row) for row in rows]
 
-    def get_recent_news_headlines(self, max_age_minutes: int = 10, limit: int = 5) -> list[str]:
+    def get_recent_news_headlines(
+        self, max_age_minutes: int = 10, limit: int = 5
+    ) -> list[str]:
         cutoff = (datetime.now(UTC) - timedelta(minutes=max_age_minutes)).isoformat()
         rows = self.connection.execute(
             """
@@ -177,14 +176,14 @@ class TradingDatabase:
             """,
             (cutoff, limit),
         ).fetchall()
-        return [str(row['headline']) for row in rows]
+        return [str(row["headline"]) for row in rows]
 
     def get_cached_sentiment(self, headlines: list[str]) -> CachedSentiment | None:
         if not headlines:
             return None
 
         hashes = [self.headline_hash(headline) for headline in headlines]
-        placeholders = ','.join('?' for _ in hashes)
+        placeholders = ",".join("?" for _ in hashes)
         rows = self.connection.execute(
             f"SELECT sentiment, confidence FROM news_data WHERE headline_hash IN ({placeholders})",
             hashes,
@@ -195,11 +194,11 @@ class TradingDatabase:
         counts = {"BULLISH": 0, "BEARISH": 0, "SIDEWAYS": 0}
         confidence_total = 0.0
         for row in rows:
-            sentiment = str(row['sentiment']).upper()
+            sentiment = str(row["sentiment"]).upper()
             if sentiment not in counts:
                 sentiment = "SIDEWAYS"
             counts[sentiment] += 1
-            confidence_total += float(row['confidence'])
+            confidence_total += float(row["confidence"])
 
         sentiment = max(counts, key=counts.get)
         confidence = confidence_total / len(rows)
@@ -214,7 +213,13 @@ class TradingDatabase:
     ) -> None:
         ts = (timestamp or datetime.now(UTC)).isoformat()
         payload = [
-            (ts, headline, sentiment.upper(), float(confidence), self.headline_hash(headline))
+            (
+                ts,
+                headline,
+                sentiment.upper(),
+                float(confidence),
+                self.headline_hash(headline),
+            )
             for headline in headlines
         ]
         self.connection.executemany(
@@ -227,7 +232,9 @@ class TradingDatabase:
         )
         self.connection.commit()
 
-    def store_signal(self, symbol: str, timestamp: str, signal: str, reason: str) -> bool:
+    def store_signal(
+        self, symbol: str, timestamp: str, signal: str, reason: str
+    ) -> bool:
         cursor = self.connection.execute(
             """
             INSERT OR REPLACE INTO signals (symbol, timestamp, signal, reason)
@@ -341,7 +348,9 @@ class TradingDatabase:
         avg_loss = gross_loss / len(losses) if losses else 0.0
         avg_rr_proxy = (avg_win / avg_loss) if avg_loss > 0 else 0.0
         win_rate = (len(wins) / len(pnls)) * 100.0
-        expectancy = (win_rate / 100.0 * avg_win) - ((1 - (win_rate / 100.0)) * avg_loss)
+        expectancy = (win_rate / 100.0 * avg_win) - (
+            (1 - (win_rate / 100.0)) * avg_loss
+        )
         return {
             "trades": float(len(pnls)),
             "wins": float(len(wins)),
@@ -362,18 +371,18 @@ class TradingDatabase:
 
     @staticmethod
     def _row_to_candle(row: sqlite3.Row) -> Candle:
-        end = normalize_market_timestamp(datetime.fromisoformat(str(row['timestamp'])))
+        end = normalize_market_timestamp(datetime.fromisoformat(str(row["timestamp"])))
         timeframe_minutes = int(os.getenv("CANDLE_INTERVAL_MINUTES", "3"))
         start = end - timedelta(minutes=timeframe_minutes)
         return Candle(
-            symbol=str(row['symbol']),
+            symbol=str(row["symbol"]),
             start=start,
             end=end,
-            open=float(row['open']),
-            high=float(row['high']),
-            low=float(row['low']),
-            close=float(row['close']),
-            volume=int(row['volume']),
+            open=float(row["open"]),
+            high=float(row["high"]),
+            low=float(row["low"]),
+            close=float(row["close"]),
+            volume=int(row["volume"]),
         )
 
 
@@ -381,5 +390,3 @@ def normalize_market_timestamp(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(IST).replace(tzinfo=None, second=0, microsecond=0)
     return value.replace(second=0, microsecond=0)
-
-        

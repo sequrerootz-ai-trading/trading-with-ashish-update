@@ -4,6 +4,12 @@ from strategy.nifty.decision_engine import build_equity_decision
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 
 
+# =========================
+# BLOCK 1: NIFTY Strategy Facade
+# Responsibility: Bridge generic callers to the NIFTY decision engine
+# Inputs: symbol, data, sentiment
+# Outputs: GeneratedSignal
+# =========================
 def generate_equity_signal(
     symbol: str,
     data: SignalContext,
@@ -11,6 +17,3 @@ def generate_equity_signal(
 ) -> GeneratedSignal:
     _ = sentiment
     return build_equity_decision(symbol, data)
-
-
-

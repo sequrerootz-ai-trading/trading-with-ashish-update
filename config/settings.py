@@ -8,8 +8,7 @@ from dotenv import load_dotenv
 
 from config.config import get_market_type, get_symbol
 
-
-SYMBOL = "NIFTY"   # allowed: NIFTY, SENSEX, CRUDEOIL
+SYMBOL = "NIFTY"  # allowed: NIFTY, SENSEX, CRUDEOIL
 DEFAULT_EXECUTION_PROFILE = "STANDARD"
 
 
@@ -287,9 +286,15 @@ NIFTY_OPTION_PROFILE_OVERRIDES: dict[str, dict[str, float | int | bool | str]] =
 }
 
 
-def _merged_profile_defaults(symbol: str, market_type: str, execution_profile: str) -> dict[str, float | int | bool | str]:
+def _merged_profile_defaults(
+    symbol: str, market_type: str, execution_profile: str
+) -> dict[str, float | int | bool | str]:
     defaults = dict(EXECUTION_PROFILE_DEFAULTS[execution_profile])
-    normalized_symbol = _normalize_equity_symbol(symbol) if market_type == "EQUITY" else symbol.strip().upper()
+    normalized_symbol = (
+        _normalize_equity_symbol(symbol)
+        if market_type == "EQUITY"
+        else symbol.strip().upper()
+    )
     if market_type == "EQUITY" and normalized_symbol == "NIFTY":
         defaults.update(NIFTY_OPTION_PROFILE_OVERRIDES[execution_profile])
     return defaults
@@ -301,7 +306,9 @@ def get_settings() -> Settings:
     symbol = get_symbol()
     market_type = get_market_type()
     execution_profile = DEFAULT_EXECUTION_PROFILE
-    profile_defaults = _merged_profile_defaults(symbol=symbol, market_type=market_type, execution_profile=execution_profile)
+    profile_defaults = _merged_profile_defaults(
+        symbol=symbol, market_type=market_type, execution_profile=execution_profile
+    )
 
     if not api_key or not access_token:
         raise ValueError(
@@ -309,10 +316,16 @@ def get_settings() -> Settings:
         )
 
     execution_settings = ExecutionSettings(
-        capital_per_trade=_get_env_float("CAPITAL_PER_TRADE", float(profile_defaults["capital_per_trade"])),
+        capital_per_trade=_get_env_float(
+            "CAPITAL_PER_TRADE", float(profile_defaults["capital_per_trade"])
+        ),
         account_balance=_get_env_float("ACCOUNT_BALANCE", 200000.0),
-        risk_per_trade_pct=_get_env_float("RISK_PER_TRADE_PCT", float(profile_defaults["risk_per_trade_pct"])),
-        max_capital_exposure=_get_env_float("MAX_CAPITAL_EXPOSURE", float(profile_defaults["max_capital_exposure"])),
+        risk_per_trade_pct=_get_env_float(
+            "RISK_PER_TRADE_PCT", float(profile_defaults["risk_per_trade_pct"])
+        ),
+        max_capital_exposure=_get_env_float(
+            "MAX_CAPITAL_EXPOSURE", float(profile_defaults["max_capital_exposure"])
+        ),
         stop_loss_percent=_get_env_float("STOP_LOSS_PERCENT", 0.20),
         trailing_stop_loss_percent=_get_env_float("TRAILING_STOP_LOSS_PERCENT", 0.20),
         max_retries=int(os.getenv("ORDER_MAX_RETRIES", "5")),
@@ -321,60 +334,145 @@ def get_settings() -> Settings:
         poll_interval_seconds=_get_env_float("ORDER_STATUS_POLL_INTERVAL_SECONDS", 1.0),
         default_product=os.getenv("ORDER_PRODUCT", "MIS").strip().upper() or "MIS",
         min_premium=_get_env_float("MIN_PREMIUM", 80.0),
-        max_premium=_get_env_float("MAX_PREMIUM", float(profile_defaults["max_premium"])),
+        max_premium=_get_env_float(
+            "MAX_PREMIUM", float(profile_defaults["max_premium"])
+        ),
         adx_trending_threshold=_get_env_float("ADX_TRENDING_THRESHOLD", 25.0),
         adx_sideways_threshold=_get_env_float("ADX_SIDEWAYS_THRESHOLD", 20.0),
         atr_spike_multiplier=_get_env_float("ATR_SPIKE_MULTIPLIER", 1.5),
-        range_compression_threshold_pct=_get_env_float("RANGE_COMPRESSION_THRESHOLD_PCT", 0.012),
+        range_compression_threshold_pct=_get_env_float(
+            "RANGE_COMPRESSION_THRESHOLD_PCT", 0.012
+        ),
         atr_stop_multiplier=_get_env_float("ATR_STOP_MULTIPLIER", 1.5),
         fixed_trail_step_pct=_get_env_float("FIXED_TRAIL_STEP_PCT", 0.08),
-        volume_spike_multiplier=_get_env_float("VOLUME_SPIKE_MULTIPLIER", float(profile_defaults["volume_spike_multiplier"])),
-        max_daily_loss=_get_env_float("MAX_DAILY_LOSS", float(profile_defaults["max_daily_loss"])),
-        max_drawdown=_get_env_float("MAX_DRAWDOWN", float(profile_defaults["max_drawdown"])),
-        max_trades_per_day=int(os.getenv("MAX_TRADES_PER_DAY", str(profile_defaults["max_trades_per_day"]))),
-        cooldown_after_two_losses=int(os.getenv("COOLDOWN_AFTER_TWO_LOSSES", str(profile_defaults["cooldown_after_two_losses"]))),
+        volume_spike_multiplier=_get_env_float(
+            "VOLUME_SPIKE_MULTIPLIER",
+            float(profile_defaults["volume_spike_multiplier"]),
+        ),
+        max_daily_loss=_get_env_float(
+            "MAX_DAILY_LOSS", float(profile_defaults["max_daily_loss"])
+        ),
+        max_drawdown=_get_env_float(
+            "MAX_DRAWDOWN", float(profile_defaults["max_drawdown"])
+        ),
+        max_trades_per_day=int(
+            os.getenv("MAX_TRADES_PER_DAY", str(profile_defaults["max_trades_per_day"]))
+        ),
+        cooldown_after_two_losses=int(
+            os.getenv(
+                "COOLDOWN_AFTER_TWO_LOSSES",
+                str(profile_defaults["cooldown_after_two_losses"]),
+            )
+        ),
         stop_after_three_losses=int(os.getenv("STOP_AFTER_THREE_LOSSES", "3")),
-        partial_profit_rr=_get_env_float("PARTIAL_PROFIT_RR", float(profile_defaults["partial_profit_rr"])),
-        partial_profit_size_pct=_get_env_float("PARTIAL_PROFIT_SIZE_PCT", float(profile_defaults["partial_profit_size_pct"])),
-        time_exit_minutes=int(os.getenv("TIME_EXIT_MINUTES", str(profile_defaults["time_exit_minutes"]))),
+        partial_profit_rr=_get_env_float(
+            "PARTIAL_PROFIT_RR", float(profile_defaults["partial_profit_rr"])
+        ),
+        partial_profit_size_pct=_get_env_float(
+            "PARTIAL_PROFIT_SIZE_PCT",
+            float(profile_defaults["partial_profit_size_pct"]),
+        ),
+        time_exit_minutes=int(
+            os.getenv("TIME_EXIT_MINUTES", str(profile_defaults["time_exit_minutes"]))
+        ),
         no_movement_threshold_pct=_get_env_float("NO_MOVEMENT_THRESHOLD_PCT", 0.05),
-        hard_flatten_minutes_before_close=int(os.getenv("HARD_FLATTEN_MINUTES_BEFORE_CLOSE", "20")),
-        slippage_entry_factor=_get_env_float("SLIPPAGE_ENTRY_FACTOR", float(profile_defaults["slippage_entry_factor"])),
-        slippage_entry_factor_high=_get_env_float("SLIPPAGE_ENTRY_FACTOR_HIGH", float(profile_defaults["slippage_entry_factor_high"])),
-        max_entry_slippage_pct=_get_env_float("MAX_ENTRY_SLIPPAGE_PCT", float(profile_defaults["max_entry_slippage_pct"])),
+        hard_flatten_minutes_before_close=int(
+            os.getenv("HARD_FLATTEN_MINUTES_BEFORE_CLOSE", "20")
+        ),
+        slippage_entry_factor=_get_env_float(
+            "SLIPPAGE_ENTRY_FACTOR", float(profile_defaults["slippage_entry_factor"])
+        ),
+        slippage_entry_factor_high=_get_env_float(
+            "SLIPPAGE_ENTRY_FACTOR_HIGH",
+            float(profile_defaults["slippage_entry_factor_high"]),
+        ),
+        max_entry_slippage_pct=_get_env_float(
+            "MAX_ENTRY_SLIPPAGE_PCT", float(profile_defaults["max_entry_slippage_pct"])
+        ),
         weekly_expiry_cutoff_hour=int(os.getenv("WEEKLY_EXPIRY_CUTOFF_HOUR", "13")),
         kill_switch=_get_env_bool("KILL_SWITCH", False),
-        trading_window_morning_start=os.getenv("TRADING_WINDOW_MORNING_START", "09:30").strip(),
-        trading_window_morning_end=os.getenv("TRADING_WINDOW_MORNING_END", "11:30").strip(),
-        trading_window_afternoon_start=os.getenv("TRADING_WINDOW_AFTERNOON_START", "13:30").strip(),
-        trading_window_afternoon_end=os.getenv("TRADING_WINDOW_AFTERNOON_END", "14:30").strip(),
+        trading_window_morning_start=os.getenv(
+            "TRADING_WINDOW_MORNING_START", "09:30"
+        ).strip(),
+        trading_window_morning_end=os.getenv(
+            "TRADING_WINDOW_MORNING_END", "11:30"
+        ).strip(),
+        trading_window_afternoon_start=os.getenv(
+            "TRADING_WINDOW_AFTERNOON_START", "13:30"
+        ).strip(),
+        trading_window_afternoon_end=os.getenv(
+            "TRADING_WINDOW_AFTERNOON_END", "14:30"
+        ).strip(),
         stop_loss_mode=os.getenv("STOP_LOSS_MODE", "ATR").strip().upper() or "ATR",
-        trailing_mode=os.getenv("TRAILING_MODE", "PREVIOUS_CANDLE").strip().upper() or "PREVIOUS_CANDLE",
-        min_stop_loss_pct=_get_env_float("MIN_STOP_LOSS_PCT", float(profile_defaults["min_stop_loss_pct"])),
-        max_stop_loss_pct=_get_env_float("MAX_STOP_LOSS_PCT", float(profile_defaults["max_stop_loss_pct"])),
+        trailing_mode=os.getenv("TRAILING_MODE", "PREVIOUS_CANDLE").strip().upper()
+        or "PREVIOUS_CANDLE",
+        min_stop_loss_pct=_get_env_float(
+            "MIN_STOP_LOSS_PCT", float(profile_defaults["min_stop_loss_pct"])
+        ),
+        max_stop_loss_pct=_get_env_float(
+            "MAX_STOP_LOSS_PCT", float(profile_defaults["max_stop_loss_pct"])
+        ),
         trailing_rr_lock_step=_get_env_float("TRAILING_RR_LOCK_STEP", 0.75),
-        trailing_buffer_pct=_get_env_float("TRAILING_BUFFER_PCT", float(profile_defaults["trailing_buffer_pct"])),
-        drawdown_size_reduction_start_pct=_get_env_float("DRAWDOWN_SIZE_REDUCTION_START_PCT", 0.5),
-        drawdown_size_reduction_factor=_get_env_float("DRAWDOWN_SIZE_REDUCTION_FACTOR", 0.5),
+        trailing_buffer_pct=_get_env_float(
+            "TRAILING_BUFFER_PCT", float(profile_defaults["trailing_buffer_pct"])
+        ),
+        drawdown_size_reduction_start_pct=_get_env_float(
+            "DRAWDOWN_SIZE_REDUCTION_START_PCT", 0.5
+        ),
+        drawdown_size_reduction_factor=_get_env_float(
+            "DRAWDOWN_SIZE_REDUCTION_FACTOR", 0.5
+        ),
         enable_vwap_filter=_get_env_bool("ENABLE_VWAP_FILTER", True),
         enable_volume_filter=_get_env_bool("ENABLE_VOLUME_FILTER", True),
         enable_volatility_filter=_get_env_bool("ENABLE_VOLATILITY_FILTER", True),
-        enable_higher_timeframe_trend_filter=_get_env_bool("ENABLE_HIGHER_TIMEFRAME_TREND_FILTER", True),
+        enable_higher_timeframe_trend_filter=_get_env_bool(
+            "ENABLE_HIGHER_TIMEFRAME_TREND_FILTER", True
+        ),
         higher_timeframe_multiple=int(os.getenv("HIGHER_TIMEFRAME_MULTIPLE", "5")),
         higher_timeframe_fast_ema=int(os.getenv("HIGHER_TIMEFRAME_FAST_EMA", "9")),
         higher_timeframe_slow_ema=int(os.getenv("HIGHER_TIMEFRAME_SLOW_EMA", "21")),
-        filter_score_threshold=_get_env_float("FILTER_SCORE_THRESHOLD", float(profile_defaults["filter_score_threshold"])),
-        filter_score_trending_bonus=_get_env_float("FILTER_SCORE_TRENDING_BONUS", float(profile_defaults["filter_score_trending_bonus"])),
-        filter_score_volatile_bonus=_get_env_float("FILTER_SCORE_VOLATILE_BONUS", float(profile_defaults["filter_score_volatile_bonus"])),
-        filter_score_sideways_penalty=_get_env_float("FILTER_SCORE_SIDEWAYS_PENALTY", float(profile_defaults["filter_score_sideways_penalty"])),
-        filter_confidence_bonus=_get_env_float("FILTER_CONFIDENCE_BONUS", float(profile_defaults["filter_confidence_bonus"])),
-        filter_sideways_weight=_get_env_float("FILTER_SIDEWAYS_WEIGHT", float(profile_defaults["filter_sideways_weight"])),
-        filter_ema_weight=_get_env_float("FILTER_EMA_WEIGHT", float(profile_defaults["filter_ema_weight"])),
-        filter_volatility_weight=_get_env_float("FILTER_VOLATILITY_WEIGHT", float(profile_defaults["filter_volatility_weight"])),
-        filter_vwap_weight=_get_env_float("FILTER_VWAP_WEIGHT", float(profile_defaults["filter_vwap_weight"])),
-        filter_volume_weight=_get_env_float("FILTER_VOLUME_WEIGHT", float(profile_defaults["filter_volume_weight"])),
-        filter_higher_tf_weight=_get_env_float("FILTER_HIGHER_TF_WEIGHT", float(profile_defaults["filter_higher_tf_weight"])),
-        max_filter_penalty_cap=_get_env_float("MAX_FILTER_PENALTY_CAP", float(profile_defaults["max_filter_penalty_cap"])),
+        filter_score_threshold=_get_env_float(
+            "FILTER_SCORE_THRESHOLD", float(profile_defaults["filter_score_threshold"])
+        ),
+        filter_score_trending_bonus=_get_env_float(
+            "FILTER_SCORE_TRENDING_BONUS",
+            float(profile_defaults["filter_score_trending_bonus"]),
+        ),
+        filter_score_volatile_bonus=_get_env_float(
+            "FILTER_SCORE_VOLATILE_BONUS",
+            float(profile_defaults["filter_score_volatile_bonus"]),
+        ),
+        filter_score_sideways_penalty=_get_env_float(
+            "FILTER_SCORE_SIDEWAYS_PENALTY",
+            float(profile_defaults["filter_score_sideways_penalty"]),
+        ),
+        filter_confidence_bonus=_get_env_float(
+            "FILTER_CONFIDENCE_BONUS",
+            float(profile_defaults["filter_confidence_bonus"]),
+        ),
+        filter_sideways_weight=_get_env_float(
+            "FILTER_SIDEWAYS_WEIGHT", float(profile_defaults["filter_sideways_weight"])
+        ),
+        filter_ema_weight=_get_env_float(
+            "FILTER_EMA_WEIGHT", float(profile_defaults["filter_ema_weight"])
+        ),
+        filter_volatility_weight=_get_env_float(
+            "FILTER_VOLATILITY_WEIGHT",
+            float(profile_defaults["filter_volatility_weight"]),
+        ),
+        filter_vwap_weight=_get_env_float(
+            "FILTER_VWAP_WEIGHT", float(profile_defaults["filter_vwap_weight"])
+        ),
+        filter_volume_weight=_get_env_float(
+            "FILTER_VOLUME_WEIGHT", float(profile_defaults["filter_volume_weight"])
+        ),
+        filter_higher_tf_weight=_get_env_float(
+            "FILTER_HIGHER_TF_WEIGHT",
+            float(profile_defaults["filter_higher_tf_weight"]),
+        ),
+        max_filter_penalty_cap=_get_env_float(
+            "MAX_FILTER_PENALTY_CAP", float(profile_defaults["max_filter_penalty_cap"])
+        ),
     )
 
     if market_type == "EQUITY":
@@ -395,7 +493,9 @@ def get_settings() -> Settings:
         execution_profile=execution_profile,
         candle_interval_minutes=int(os.getenv("CANDLE_INTERVAL_MINUTES", "3")),
         stale_tick_warning_seconds=int(os.getenv("STALE_TICK_WARNING_SECONDS", "45")),
-        stale_candle_warning_seconds=int(os.getenv("STALE_CANDLE_WARNING_SECONDS", "300")),
+        stale_candle_warning_seconds=int(
+            os.getenv("STALE_CANDLE_WARNING_SECONDS", "300")
+        ),
         execution=execution_settings,
         instruments=[instrument],
     )

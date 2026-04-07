@@ -104,8 +104,12 @@ def calculate_adx(candles: list[Candle], period: int = 14) -> float | None:
 
     for index in range(period, len(tr_values)):
         smoothed_tr = smoothed_tr - (smoothed_tr / period) + tr_values[index]
-        smoothed_plus_dm = smoothed_plus_dm - (smoothed_plus_dm / period) + plus_dm_values[index]
-        smoothed_minus_dm = smoothed_minus_dm - (smoothed_minus_dm / period) + minus_dm_values[index]
+        smoothed_plus_dm = (
+            smoothed_plus_dm - (smoothed_plus_dm / period) + plus_dm_values[index]
+        )
+        smoothed_minus_dm = (
+            smoothed_minus_dm - (smoothed_minus_dm / period) + minus_dm_values[index]
+        )
 
         if smoothed_tr <= 0:
             continue
@@ -130,7 +134,10 @@ def calculate_vwap(candles: list[Candle]) -> float | None:
     total_volume = sum(max(candle.volume, 0) for candle in candles)
     if total_volume <= 0:
         return None
-    traded_value = sum((((candle.high + candle.low + candle.close) / 3) * max(candle.volume, 0)) for candle in candles)
+    traded_value = sum(
+        (((candle.high + candle.low + candle.close) / 3) * max(candle.volume, 0))
+        for candle in candles
+    )
     return round(traded_value / total_volume, 2)
 
 
@@ -141,7 +148,9 @@ def calculate_volume_average(candles: list[Candle], period: int = 10) -> float |
     return round(sum(max(candle.volume, 0) for candle in window) / period, 2)
 
 
-def calculate_indicators(close_prices: list[float], symbol: str | None = None) -> IndicatorSnapshot:
+def calculate_indicators(
+    close_prices: list[float], symbol: str | None = None
+) -> IndicatorSnapshot:
     symbol_config = get_symbol_config(symbol)
     return IndicatorSnapshot(
         ema_9=calculate_ema(close_prices, period=int(symbol_config["ema_fast"])),

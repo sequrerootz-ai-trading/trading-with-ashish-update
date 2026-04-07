@@ -6,7 +6,6 @@ from markets.equity.sensex.option_chain import get_option_data
 from strategy.common.signal_types import GeneratedSignal
 from strategy.sensex.strategy import generate_sensex_signal
 
-
 logger = logging.getLogger(__name__)
 
 

@@ -6,7 +6,6 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_SYMBOLS = ("NIFTY", "SENSEX", "CRUDEOIL")
 STATE_FILE = Path("web_state.json")
 
@@ -107,19 +106,28 @@ class WebSocketManager:
             return self._default_signal_state(symbol)
 
         details = getattr(signal, "details", None)
-        option = getattr(details, "option_suggestion", None) if details is not None else None
+        option = (
+            getattr(details, "option_suggestion", None) if details is not None else None
+        )
         return {
             "symbol": symbol,
             "signal": getattr(signal, "signal", "NO_TRADE") or "NO_TRADE",
-            "reason": getattr(signal, "reason", "waiting_for_signal") or "waiting_for_signal",
+            "reason": getattr(signal, "reason", "waiting_for_signal")
+            or "waiting_for_signal",
             "summary": getattr(details, "summary", "") if details is not None else "",
             "confidence": float(getattr(signal, "confidence", 0.0) or 0.0),
             "entry_price": self._safe_number(getattr(signal, "entry_price", None)),
             "target": self._safe_number(getattr(signal, "target", None)),
             "stop_loss": self._safe_number(getattr(signal, "stop_loss", None)),
             "timestamp": getattr(signal, "timestamp", "") or "",
-            "details": asdict(details) if details is not None and is_dataclass(details) else None,
-            "option": asdict(option) if option is not None and is_dataclass(option) else None,
+            "details": (
+                asdict(details)
+                if details is not None and is_dataclass(details)
+                else None
+            ),
+            "option": (
+                asdict(option) if option is not None and is_dataclass(option) else None
+            ),
             "context": self._safe_context(getattr(signal, "context", None)),
         }
 
@@ -164,7 +172,9 @@ class WebSocketManager:
                 safe[str(key)] = item
             elif isinstance(item, list):
                 safe[str(key)] = [
-                    entry for entry in item if isinstance(entry, (str, int, float, bool)) or entry is None
+                    entry
+                    for entry in item
+                    if isinstance(entry, (str, int, float, bool)) or entry is None
                 ]
         return safe
 

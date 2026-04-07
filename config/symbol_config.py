@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from config.config import get_symbol
 
-
 SYMBOL_CONFIG = {
     "NIFTY": {
         "market": "EQUITY",

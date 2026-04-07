@@ -5,7 +5,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -202,15 +201,38 @@ class TradeManager:
             trading_symbol=str(changes.get("trading_symbol", trade.trading_symbol)),
             exchange=str(changes.get("exchange", trade.exchange)),
             option_type=str(changes.get("option_type", trade.option_type)),
-            entry_low=float(self._safe_float(changes.get("entry_low", trade.entry_low), trade.entry_low) or trade.entry_low),
-            entry_high=float(self._safe_float(changes.get("entry_high", trade.entry_high), trade.entry_high) or trade.entry_high),
-            stop_loss=float(self._safe_float(changes.get("stop_loss", trade.stop_loss), trade.stop_loss) or trade.stop_loss),
+            entry_low=float(
+                self._safe_float(
+                    changes.get("entry_low", trade.entry_low), trade.entry_low
+                )
+                or trade.entry_low
+            ),
+            entry_high=float(
+                self._safe_float(
+                    changes.get("entry_high", trade.entry_high), trade.entry_high
+                )
+                or trade.entry_high
+            ),
+            stop_loss=float(
+                self._safe_float(
+                    changes.get("stop_loss", trade.stop_loss), trade.stop_loss
+                )
+                or trade.stop_loss
+            ),
             initial_stop_loss=float(
-                self._safe_float(changes.get("initial_stop_loss", trade.initial_stop_loss), trade.initial_stop_loss)
+                self._safe_float(
+                    changes.get("initial_stop_loss", trade.initial_stop_loss),
+                    trade.initial_stop_loss,
+                )
                 or trade.initial_stop_loss
             ),
-            quantity=self._safe_int(changes.get("quantity", trade.quantity), trade.quantity),
-            remaining_quantity=self._safe_int(changes.get("remaining_quantity", trade.remaining_quantity), trade.remaining_quantity),
+            quantity=self._safe_int(
+                changes.get("quantity", trade.quantity), trade.quantity
+            ),
+            remaining_quantity=self._safe_int(
+                changes.get("remaining_quantity", trade.remaining_quantity),
+                trade.remaining_quantity,
+            ),
             entry_price=(
                 self._safe_float(changes["entry_price"], trade.entry_price)
                 if "entry_price" in changes and changes["entry_price"] is not None
@@ -229,13 +251,21 @@ class TradeManager:
             ),
             stop_loss_order_id=(
                 str(changes["stop_loss_order_id"])
-                if "stop_loss_order_id" in changes and changes["stop_loss_order_id"] is not None
+                if "stop_loss_order_id" in changes
+                and changes["stop_loss_order_id"] is not None
                 else trade.stop_loss_order_id
             ),
-            partial_exit_done=bool(changes.get("partial_exit_done", trade.partial_exit_done)),
+            partial_exit_done=bool(
+                changes.get("partial_exit_done", trade.partial_exit_done)
+            ),
             regime=str(changes.get("regime", trade.regime)),
             entry_reason=str(changes.get("entry_reason", trade.entry_reason)),
-            rr_ratio=float(self._safe_float(changes.get("rr_ratio", trade.rr_ratio), trade.rr_ratio) or trade.rr_ratio),
+            rr_ratio=float(
+                self._safe_float(
+                    changes.get("rr_ratio", trade.rr_ratio), trade.rr_ratio
+                )
+                or trade.rr_ratio
+            ),
             target_price=(
                 self._safe_float(changes["target_price"], trade.target_price)
                 if "target_price" in changes and changes["target_price"] is not None
@@ -243,12 +273,14 @@ class TradeManager:
             ),
             confirmation_high=(
                 self._safe_float(changes["confirmation_high"], trade.confirmation_high)
-                if "confirmation_high" in changes and changes["confirmation_high"] is not None
+                if "confirmation_high" in changes
+                and changes["confirmation_high"] is not None
                 else trade.confirmation_high
             ),
             confirmation_low=(
                 self._safe_float(changes["confirmation_low"], trade.confirmation_low)
-                if "confirmation_low" in changes and changes["confirmation_low"] is not None
+                if "confirmation_low" in changes
+                and changes["confirmation_low"] is not None
                 else trade.confirmation_low
             ),
             opened_at=(
@@ -256,7 +288,12 @@ class TradeManager:
                 if "opened_at" in changes and changes["opened_at"] is not None
                 else trade.opened_at
             ),
-            realized_pnl=float(self._safe_float(changes.get("realized_pnl", trade.realized_pnl), trade.realized_pnl) or 0.0),
+            realized_pnl=float(
+                self._safe_float(
+                    changes.get("realized_pnl", trade.realized_pnl), trade.realized_pnl
+                )
+                or 0.0
+            ),
             mfe_price=(
                 self._safe_float(changes["mfe_price"], trade.mfe_price)
                 if "mfe_price" in changes and changes["mfe_price"] is not None
@@ -292,7 +329,9 @@ class TradeManager:
                 self._active_trades[trade.symbol] = previous_trade
         return updated or trade
 
-    def close_active_trade(self, symbol: str, reason: str, exit_price: float) -> ActiveTrade | None:
+    def close_active_trade(
+        self, symbol: str, reason: str, exit_price: float
+    ) -> ActiveTrade | None:
         trade = self._active_trades.pop(symbol, None)
         self._trade_ids.pop(symbol, None)
 

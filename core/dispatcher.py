@@ -5,7 +5,6 @@ from typing import Any
 
 from config import get_symbol
 
-
 SYMBOL_MAP = {
     "NIFTY": "markets.equity.nifty.strategy",
     "SENSEX": "markets.equity.sensex.strategy",

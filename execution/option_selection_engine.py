@@ -8,7 +8,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
@@ -120,12 +119,23 @@ def filter_by_premium(
 
     for option in _normalize_options(options):
         if option.ltp < market_rules["hard_min"]:
-            logger.debug("Rejected %s: premium %.2f below hard minimum", option.symbol, option.ltp)
+            logger.debug(
+                "Rejected %s: premium %.2f below hard minimum",
+                option.symbol,
+                option.ltp,
+            )
             continue
         if option.ltp > market_rules["hard_max"]:
-            logger.debug("Rejected %s: premium %.2f above hard maximum", option.symbol, option.ltp)
+            logger.debug(
+                "Rejected %s: premium %.2f above hard maximum",
+                option.symbol,
+                option.ltp,
+            )
             continue
-        if option.ltp < selection_config.min_premium or option.ltp > selection_config.max_premium:
+        if (
+            option.ltp < selection_config.min_premium
+            or option.ltp > selection_config.max_premium
+        ):
             logger.debug(
                 "Rejected %s: premium %.2f outside configured range %.2f-%.2f",
                 option.symbol,
@@ -147,7 +157,9 @@ def filter_by_premium(
     return filtered
 
 
-def analyze_oi(options: list[dict[str, Any]] | list[OptionCandidate]) -> dict[str, dict[str, Any]]:
+def analyze_oi(
+    options: list[dict[str, Any]] | list[OptionCandidate],
+) -> dict[str, dict[str, Any]]:
     normalized_options = _normalize_options(options)
     if not normalized_options:
         return {}
@@ -198,7 +210,11 @@ def analyze_oi(options: list[dict[str, Any]] | list[OptionCandidate]) -> dict[st
             score -= 1.0
             reason_parts.append("low_volume")
 
-        if option.oi >= high_oi_threshold and option.volume < average_volume and option.price_change <= 0:
+        if (
+            option.oi >= high_oi_threshold
+            and option.volume < average_volume
+            and option.price_change <= 0
+        ):
             rejected = True
             reason_parts.append("crowded_without_followthrough")
 
@@ -232,20 +248,35 @@ def select_best_option(
         return None
 
     normalized_options = _normalize_options(options)
-    filtered_options = filter_by_premium(normalized_options, normalized_market_type, selection_config)
+    filtered_options = filter_by_premium(
+        normalized_options, normalized_market_type, selection_config
+    )
     if not filtered_options:
-        logger.info("No options passed premium/liquidity filters for market_type=%s", normalized_market_type)
+        logger.info(
+            "No options passed premium/liquidity filters for market_type=%s",
+            normalized_market_type,
+        )
         return None
 
     option_type = "CE" if normalized_signal == "BUY CALL" else "PE"
-    same_side_options = [option for option in filtered_options if option.option_type == option_type]
+    same_side_options = [
+        option for option in filtered_options if option.option_type == option_type
+    ]
     if not same_side_options:
         logger.info("No %s contracts available after premium filtering.", option_type)
         return None
 
-    iv_limit = selection_config.equity_max_iv if normalized_market_type == "EQUITY" else selection_config.mcx_max_iv
+    iv_limit = (
+        selection_config.equity_max_iv
+        if normalized_market_type == "EQUITY"
+        else selection_config.mcx_max_iv
+    )
     liquid_side_options = _apply_liquidity_filters(same_side_options, selection_config)
-    iv_filtered_options = [option for option in liquid_side_options if option.iv is None or option.iv <= iv_limit]
+    iv_filtered_options = [
+        option
+        for option in liquid_side_options
+        if option.iv is None or option.iv <= iv_limit
+    ]
     if not iv_filtered_options:
         logger.info("No contracts passed IV/liquidity filter. limit=%.2f", iv_limit)
         return None
@@ -261,7 +292,12 @@ def select_best_option(
         option_type,
     )
     strike_step = _infer_strike_step(strikes)
-    preferred_strikes = _preferred_strikes(normalized_signal, atm_strike, strike_step, selection_config.strike_preference_width)
+    preferred_strikes = _preferred_strikes(
+        normalized_signal,
+        atm_strike,
+        strike_step,
+        selection_config.strike_preference_width,
+    )
     oi_analysis = analyze_oi(iv_filtered_options)
 
     ranked_options: list[RankedOption] = []
@@ -285,7 +321,11 @@ def select_best_option(
 
         oi_result = oi_analysis.get(option.symbol, {})
         if oi_result.get("rejected"):
-            logger.info("[OPTION_DECISION] %s | Rejected | Reason=%s", option.symbol, "; ".join(oi_result.get("reason_parts", [])) or "oi_filter_rejected")
+            logger.info(
+                "[OPTION_DECISION] %s | Rejected | Reason=%s",
+                option.symbol,
+                "; ".join(oi_result.get("reason_parts", [])) or "oi_filter_rejected",
+            )
             continue
 
         score = 0.0
@@ -316,7 +356,9 @@ def select_best_option(
         )
 
     if not ranked_options:
-        logger.info("No option matched strike selection logic for signal=%s", normalized_signal)
+        logger.info(
+            "No option matched strike selection logic for signal=%s", normalized_signal
+        )
         return None
 
     best_option = max(ranked_options, key=lambda ranked: ranked.score)
@@ -354,7 +396,9 @@ def calculate_sl_target(
     selection_config = config or get_option_selection_config()
     stop_loss = _round_price(premium * (1 - selection_config.stop_loss_percent))
     risk = max(premium - stop_loss, premium * 0.01)
-    rr_ratio = max(selection_config.risk_reward_ratio, selection_config.minimum_reward_to_risk)
+    rr_ratio = max(
+        selection_config.risk_reward_ratio, selection_config.minimum_reward_to_risk
+    )
     target = _round_price(premium + (risk * rr_ratio))
     return stop_loss, target
 
@@ -375,14 +419,20 @@ def generate_trade_signal(
 
     ranked_option = _coerce_ranked_option(option)
     stop_loss, target = calculate_sl_target(ranked_option.option.ltp, selection_config)
-    entry_range = _entry_range(ranked_option.option.ltp, ranked_option.option.spread_pct, selection_config)
+    entry_range = _entry_range(
+        ranked_option.option.ltp, ranked_option.option.spread_pct, selection_config
+    )
 
     # Include richer diagnostics while preserving the existing keys used elsewhere.
     return {
         "symbol": ranked_option.option.symbol,
         "market_type": normalized_market_type,
         "signal": normalized_signal,
-        "strike": int(ranked_option.option.strike) if ranked_option.option.strike.is_integer() else ranked_option.option.strike,
+        "strike": (
+            int(ranked_option.option.strike)
+            if ranked_option.option.strike.is_integer()
+            else ranked_option.option.strike
+        ),
         "strike_type": ranked_option.strike_type,
         "premium": _round_price(ranked_option.option.ltp),
         "entry_range": entry_range,
@@ -391,7 +441,11 @@ def generate_trade_signal(
         "confidence": ranked_option.confidence,
         "reason": ranked_option.reason,
         "score": _round_price(ranked_option.score),
-        "spread_pct": None if ranked_option.option.spread_pct is None else _round_price(ranked_option.option.spread_pct * 100),
+        "spread_pct": (
+            None
+            if ranked_option.option.spread_pct is None
+            else _round_price(ranked_option.option.spread_pct * 100)
+        ),
         "iv": ranked_option.option.iv,
     }
 
@@ -409,7 +463,9 @@ def select_option_trade(
     return generate_trade_signal(best_option, signal, market_type, config)
 
 
-def _normalize_options(options: list[dict[str, Any]] | list[OptionCandidate]) -> list[OptionCandidate]:
+def _normalize_options(
+    options: list[dict[str, Any]] | list[OptionCandidate],
+) -> list[OptionCandidate]:
     normalized: list[OptionCandidate] = []
 
     for item in options:
@@ -418,17 +474,35 @@ def _normalize_options(options: list[dict[str, Any]] | list[OptionCandidate]) ->
             continue
 
         strike = float(item["strike"])
-        option_type = _normalize_option_type(str(item.get("type") or item.get("option_type") or ""))
-        ltp = float(item.get("ltp") or item.get("premium") or item.get("last_price") or 0.0)
+        option_type = _normalize_option_type(
+            str(item.get("type") or item.get("option_type") or "")
+        )
+        ltp = float(
+            item.get("ltp") or item.get("premium") or item.get("last_price") or 0.0
+        )
         symbol = str(item.get("symbol") or f"{_safe_int(strike)} {option_type}")
         oi = float(item.get("oi") or 0.0)
-        oi_change = float(item.get("oi_change") or item.get("change_in_oi") or item.get("change_in_oi_value") or 0.0)
+        oi_change = float(
+            item.get("oi_change")
+            or item.get("change_in_oi")
+            or item.get("change_in_oi_value")
+            or 0.0
+        )
         volume = float(item.get("volume") or 0.0)
         iv_value = item.get("iv")
         iv = float(iv_value) if iv_value is not None else None
-        price_change = float(item.get("price_change") or item.get("premium_change") or item.get("net_change") or 0.0)
-        bid = _coerce_optional_float(item.get("bid") or item.get("best_bid") or item.get("buy_price"))
-        ask = _coerce_optional_float(item.get("ask") or item.get("best_ask") or item.get("sell_price"))
+        price_change = float(
+            item.get("price_change")
+            or item.get("premium_change")
+            or item.get("net_change")
+            or 0.0
+        )
+        bid = _coerce_optional_float(
+            item.get("bid") or item.get("best_bid") or item.get("buy_price")
+        )
+        ask = _coerce_optional_float(
+            item.get("ask") or item.get("best_ask") or item.get("sell_price")
+        )
         spread_pct = _calculate_spread_pct(bid, ask, ltp)
 
         normalized.append(
@@ -445,8 +519,11 @@ def _normalize_options(options: list[dict[str, Any]] | list[OptionCandidate]) ->
                 bid=bid,
                 ask=ask,
                 spread_pct=spread_pct,
-                expiry=str(item.get("expiry")) if item.get("expiry") is not None else None,
-                underlying=str(item.get("underlying") or item.get("name") or "") or None,
+                expiry=(
+                    str(item.get("expiry")) if item.get("expiry") is not None else None
+                ),
+                underlying=str(item.get("underlying") or item.get("name") or "")
+                or None,
             )
         )
 
@@ -485,22 +562,33 @@ def _normalize_option_type(option_type: str) -> str:
     raise ValueError(f"Unsupported option type: {option_type}")
 
 
-def _preferred_strikes(signal: str, atm_strike: float, strike_step: float, width: int) -> set[float]:
+def _preferred_strikes(
+    signal: str, atm_strike: float, strike_step: float, width: int
+) -> set[float]:
     normalized_width = max(width, 1)
     if signal == "BUY CALL":
-        return {atm_strike + (strike_step * offset) for offset in range(0, normalized_width + 1)} | {atm_strike - strike_step}
-    return {atm_strike - (strike_step * offset) for offset in range(0, normalized_width + 1)} | {atm_strike + strike_step}
+        return {
+            atm_strike + (strike_step * offset)
+            for offset in range(0, normalized_width + 1)
+        } | {atm_strike - strike_step}
+    return {
+        atm_strike - (strike_step * offset) for offset in range(0, normalized_width + 1)
+    } | {atm_strike + strike_step}
 
 
 def _infer_strike_step(strikes: list[float]) -> float:
     if len(strikes) < 2:
         return 50.0
 
-    deltas = [right - left for left, right in zip(strikes, strikes[1:]) if (right - left) > 0]
+    deltas = [
+        right - left for left, right in zip(strikes, strikes[1:]) if (right - left) > 0
+    ]
     return min(deltas) if deltas else 50.0
 
 
-def _strike_score(strike: float, preferred_strikes: set[float], atm_strike: float, ltp: float) -> float:
+def _strike_score(
+    strike: float, preferred_strikes: set[float], atm_strike: float, ltp: float
+) -> float:
     if strike not in preferred_strikes:
         return 0.0
 
@@ -573,7 +661,11 @@ def _build_reason_parts(
     atm_strike: float,
     oi_result: dict[str, Any],
 ) -> list[str]:
-    strike_label = "ATM" if option.strike == atm_strike else _classify_strike_type(option.strike, ltp)
+    strike_label = (
+        "ATM"
+        if option.strike == atm_strike
+        else _classify_strike_type(option.strike, ltp)
+    )
     direction_label = "call" if signal == "BUY CALL" else "put"
     parts = [f"{strike_label} {direction_label} selected"]
 
@@ -593,7 +685,9 @@ def _build_reason_parts(
     return parts
 
 
-def _coerce_ranked_option(option: RankedOption | dict[str, Any] | OptionCandidate) -> RankedOption:
+def _coerce_ranked_option(
+    option: RankedOption | dict[str, Any] | OptionCandidate,
+) -> RankedOption:
     if isinstance(option, RankedOption):
         return option
     if isinstance(option, OptionCandidate):
@@ -606,7 +700,10 @@ def _coerce_ranked_option(option: RankedOption | dict[str, Any] | OptionCandidat
         )
 
     candidate = _normalize_options([option])[0]
-    strike_type = str(option.get("strike_type") or _classify_strike_type(candidate.strike, candidate.strike))
+    strike_type = str(
+        option.get("strike_type")
+        or _classify_strike_type(candidate.strike, candidate.strike)
+    )
     confidence = str(option.get("confidence") or "LOW")
     reason = str(option.get("reason") or "Option dictionary supplied directly")
     score = float(option.get("score") or 0.0)
@@ -619,7 +716,9 @@ def _coerce_ranked_option(option: RankedOption | dict[str, Any] | OptionCandidat
     )
 
 
-def _entry_range(premium: float, spread_pct: float | None, config: OptionSelectionConfig) -> list[float]:
+def _entry_range(
+    premium: float, spread_pct: float | None, config: OptionSelectionConfig
+) -> list[float]:
     base_buffer = max(config.entry_buffer_pct, 0.005)
     spread_buffer = 0.0 if spread_pct is None else min(spread_pct / 2, 0.02)
     buffer_pct = base_buffer + spread_buffer
@@ -629,7 +728,9 @@ def _entry_range(premium: float, spread_pct: float | None, config: OptionSelecti
     ]
 
 
-def _apply_liquidity_filters(options: list[OptionCandidate], config: OptionSelectionConfig) -> list[OptionCandidate]:
+def _apply_liquidity_filters(
+    options: list[OptionCandidate], config: OptionSelectionConfig
+) -> list[OptionCandidate]:
     if not options:
         return []
     average_volume = _average([option.volume for option in options])
@@ -640,16 +741,25 @@ def _apply_liquidity_filters(options: list[OptionCandidate], config: OptionSelec
     filtered: list[OptionCandidate] = []
     for option in options:
         if average_volume > 0 and option.volume < min_volume:
-            logger.debug("Rejected %s: volume %.2f below min %.2f", option.symbol, option.volume, min_volume)
+            logger.debug(
+                "Rejected %s: volume %.2f below min %.2f",
+                option.symbol,
+                option.volume,
+                min_volume,
+            )
             continue
         if average_oi > 0 and option.oi < min_oi:
-            logger.debug("Rejected %s: oi %.2f below min %.2f", option.symbol, option.oi, min_oi)
+            logger.debug(
+                "Rejected %s: oi %.2f below min %.2f", option.symbol, option.oi, min_oi
+            )
             continue
         filtered.append(option)
     return filtered
 
 
-def _calculate_spread_pct(bid: float | None, ask: float | None, ltp: float) -> float | None:
+def _calculate_spread_pct(
+    bid: float | None, ask: float | None, ltp: float
+) -> float | None:
     if bid is None or ask is None or bid <= 0 or ask <= 0 or ltp <= 0 or ask < bid:
         return None
     mid = (bid + ask) / 2
@@ -712,7 +822,9 @@ def _get_float_env(name: str, default: float) -> float:
     try:
         return float(value)
     except ValueError:
-        logger.warning("Invalid float for %s=%s. Using default %.2f", name, value, default)
+        logger.warning(
+            "Invalid float for %s=%s. Using default %.2f", name, value, default
+        )
         return default
 
 

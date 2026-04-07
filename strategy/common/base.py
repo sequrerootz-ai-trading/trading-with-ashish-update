@@ -73,7 +73,9 @@ class CandleCloseSignalStrategy:
         premium_price = None
         if should_trade and self.premium_fetcher is not None and signal is not None:
             try:
-                premium_quote = self.premium_fetcher(candle.symbol, candle.close, signal)
+                premium_quote = self.premium_fetcher(
+                    candle.symbol, candle.close, signal
+                )
             except Exception:
                 premium_quote = None
                 reason_parts.append("premium_lookup_failed")
@@ -127,11 +129,19 @@ class CandleCloseSignalStrategy:
             return None, "weak", 0.0, "insufficient_history"
 
         candle_range = max(current_candle.high - current_candle.low, 0.0)
-        close_position = 0.5 if candle_range == 0 else (current_candle.close - current_candle.low) / candle_range
+        close_position = (
+            0.5
+            if candle_range == 0
+            else (current_candle.close - current_candle.low) / candle_range
+        )
         volume_ok = current_candle.volume > (1.3 * avg_volume)
 
-        bullish_breakout = current_candle.high > previous_candle.high and close_position > 0.60
-        bearish_breakdown = current_candle.low < previous_candle.low and close_position < 0.40
+        bullish_breakout = (
+            current_candle.high > previous_candle.high and close_position > 0.60
+        )
+        bearish_breakdown = (
+            current_candle.low < previous_candle.low and close_position < 0.40
+        )
         bullish_rsi = rsi is not None and rsi >= 55
         bearish_rsi = rsi is not None and rsi <= 45
 
@@ -168,4 +178,3 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
-

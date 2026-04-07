@@ -17,7 +17,6 @@ def _execution_settings():
     return _root_module()._execution_settings()
 
 
-
 def _is_priority_setup(generated_signal, regime_snapshot: MarketRegimeSnapshot) -> bool:
     return _root_module()._is_priority_setup(generated_signal, regime_snapshot)
 
@@ -26,7 +25,13 @@ def _env_float(name: str, default: float) -> float:
     return _root_module()._env_float(name, default)
 
 
-def _should_skip_trade(symbol: str, generated_signal, premium_price: float, candle_manager: CandleManager, regime_snapshot: MarketRegimeSnapshot) -> bool:
+def _should_skip_trade(
+    symbol: str,
+    generated_signal,
+    premium_price: float,
+    candle_manager: CandleManager,
+    regime_snapshot: MarketRegimeSnapshot,
+) -> bool:
     settings = _execution_settings()
     if not _premium_in_range(premium_price, regime_snapshot):
         _print_skip("Premium outside allowed range")
@@ -40,7 +45,9 @@ def _should_skip_trade(symbol: str, generated_signal, premium_price: float, cand
         regime_snapshot=regime_snapshot,
     )
     if score > threshold:
-        _print_skip(f"High penalty score ({score:.2f}/{threshold:.2f}) | {'; '.join(reasons[:3])}")
+        _print_skip(
+            f"High penalty score ({score:.2f}/{threshold:.2f}) | {'; '.join(reasons[:3])}"
+        )
         logging.info(
             "[FILTER SCORE] Trade rejected due to high penalty | %s | penalty_score=%.2f | threshold=%.2f | reasons=%s",
             symbol,
@@ -72,7 +79,9 @@ def _calculate_filter_score(
 
     regime_penalty = _regime_penalty(regime_snapshot, settings)
     if regime_penalty > 0:
-        penalties.append((regime_penalty * 0.75, f"regime={regime_snapshot.regime.lower()}"))
+        penalties.append(
+            (regime_penalty * 0.75, f"regime={regime_snapshot.regime.lower()}")
+        )
 
     ema_penalty = _ema_spread_penalty(generated_signal, settings)
     if ema_penalty > 0:
@@ -82,7 +91,9 @@ def _calculate_filter_score(
     if volatility_penalty > 0:
         penalties.append((volatility_penalty * 0.7, "recent_range_compressed"))
 
-    extension_penalty, extension_reason = _signal_extension_penalty(generated_signal, settings)
+    extension_penalty, extension_reason = _signal_extension_penalty(
+        generated_signal, settings
+    )
     if extension_penalty > 0:
         penalties.append((extension_penalty, extension_reason or "rsi_extended"))
 
@@ -100,7 +111,9 @@ def _calculate_filter_score(
     for reason in market_reasons:
         penalties.append((0.0, reason))
 
-    higher_tf_penalty = _higher_timeframe_penalty(symbol, generated_signal.signal, candle_manager, settings)
+    higher_tf_penalty = _higher_timeframe_penalty(
+        symbol, generated_signal.signal, candle_manager, settings
+    )
     if higher_tf_penalty > 0:
         penalties.append((higher_tf_penalty * 0.65, "higher_tf_misaligned"))
 
@@ -112,7 +125,9 @@ def _calculate_filter_score(
     elif regime_snapshot.regime == "SIDEWAYS":
         threshold -= max(settings.filter_score_sideways_penalty * 0.5, 0.0)
 
-    confidence = max(0.0, min(float(getattr(generated_signal, "confidence", 0.0) or 0.0), 1.0))
+    confidence = max(
+        0.0, min(float(getattr(generated_signal, "confidence", 0.0) or 0.0), 1.0)
+    )
     threshold += max(confidence - 0.50, 0.0) * (settings.filter_confidence_bonus + 0.5)
     if _is_priority_setup(generated_signal, regime_snapshot):
         threshold += 0.35
@@ -123,11 +138,15 @@ def _calculate_filter_score(
     return score, reasons, round(max(threshold, 1.2), 2)
 
 
-def _higher_timeframe_penalty(symbol: str, signal: str, candle_manager: CandleManager, settings) -> float:
+def _higher_timeframe_penalty(
+    symbol: str, signal: str, candle_manager: CandleManager, settings
+) -> float:
     if not settings.enable_higher_timeframe_trend_filter:
         return 0.0
     candles = candle_manager.get_closed_candles(symbol)
-    aggregated_closes = _aggregate_higher_timeframe_closes(candles, settings.higher_timeframe_multiple)
+    aggregated_closes = _aggregate_higher_timeframe_closes(
+        candles, settings.higher_timeframe_multiple
+    )
     if len(aggregated_closes) < settings.higher_timeframe_slow_ema:
         return 0.0
 
@@ -166,7 +185,9 @@ def _regime_penalty(regime_snapshot: MarketRegimeSnapshot, settings) -> float:
     return 0.0
 
 
-def _premium_in_range(premium_price: float, regime_snapshot: MarketRegimeSnapshot) -> bool:
+def _premium_in_range(
+    premium_price: float, regime_snapshot: MarketRegimeSnapshot
+) -> bool:
     settings = _execution_settings()
     min_premium = settings.min_premium
     max_premium = settings.max_premium
@@ -219,13 +240,25 @@ def _signal_extension_penalty(generated_signal, settings) -> tuple[float, str | 
 
     rsi_value = float(rsi)
     if signal == "BUY_PE" and rsi_value <= 18.0:
-        return round(settings.filter_volume_weight * 0.95, 2), f"rsi_oversold={rsi_value:.2f}"
+        return (
+            round(settings.filter_volume_weight * 0.95, 2),
+            f"rsi_oversold={rsi_value:.2f}",
+        )
     if signal == "BUY_PE" and rsi_value <= 22.0:
-        return round(settings.filter_volume_weight * 0.55, 2), f"rsi_extended={rsi_value:.2f}"
+        return (
+            round(settings.filter_volume_weight * 0.55, 2),
+            f"rsi_extended={rsi_value:.2f}",
+        )
     if signal == "BUY_CE" and rsi_value >= 82.0:
-        return round(settings.filter_volume_weight * 0.95, 2), f"rsi_overbought={rsi_value:.2f}"
+        return (
+            round(settings.filter_volume_weight * 0.95, 2),
+            f"rsi_overbought={rsi_value:.2f}",
+        )
     if signal == "BUY_CE" and rsi_value >= 78.0:
-        return round(settings.filter_volume_weight * 0.55, 2), f"rsi_extended={rsi_value:.2f}"
+        return (
+            round(settings.filter_volume_weight * 0.55, 2),
+            f"rsi_extended={rsi_value:.2f}",
+        )
     return 0.0, None
 
 
@@ -258,17 +291,16 @@ def _vwap_volume_penalties(
             vwap_penalty = round(severity * settings.filter_vwap_weight, 2)
             reasons.append("price_above_vwap")
 
-    if settings.enable_volume_filter and volume_spike_ratio is not None and settings.volume_spike_multiplier > 0:
+    if (
+        settings.enable_volume_filter
+        and volume_spike_ratio is not None
+        and settings.volume_spike_multiplier > 0
+    ):
         if volume_spike_ratio < settings.volume_spike_multiplier:
-            shortfall_ratio = 1.0 - (volume_spike_ratio / settings.volume_spike_multiplier)
+            shortfall_ratio = 1.0 - (
+                volume_spike_ratio / settings.volume_spike_multiplier
+            )
             volume_penalty = round(shortfall_ratio * settings.filter_volume_weight, 2)
             reasons.append(f"volume_ratio={volume_spike_ratio:.2f}x")
 
     return vwap_penalty, volume_penalty, reasons
-
-
-
-
-
-
-

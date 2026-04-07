@@ -11,7 +11,6 @@ from data.database import TradingDatabase, normalize_market_timestamp
 from data.market_data import MarketDataService
 from strategy.strategy import MINIMUM_INDICATOR_CANDLES
 
-
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 MARKET_OPEN_HOUR = 9
@@ -29,11 +28,15 @@ class HistoricalLoadResult:
 
 
 class HistoricalDataLoader:
-    def __init__(self, market_data: MarketDataService, database: TradingDatabase) -> None:
+    def __init__(
+        self, market_data: MarketDataService, database: TradingDatabase
+    ) -> None:
         self.market_data = market_data
         self.database = database
 
-    def fetch_historical_candles(self, symbol: str, market_type: str | None = None) -> list[Candle]:
+    def fetch_historical_candles(
+        self, symbol: str, market_type: str | None = None
+    ) -> list[Candle]:
         instrument = self.market_data.get_resolved_instrument(symbol)
         timeframe_minutes = self.market_data.settings.candle_interval_minutes
         normalized_market_type = market_type or self.market_data.settings.market_type
@@ -49,9 +52,13 @@ class HistoricalDataLoader:
         )
 
         try:
-            cached = self.database.get_recent_candles(symbol=symbol, limit=MAX_STARTUP_CANDLES)
+            cached = self.database.get_recent_candles(
+                symbol=symbol, limit=MAX_STARTUP_CANDLES
+            )
             cached = [candle for candle in cached if candle.end <= session_end]
-            current_session_cached = [candle for candle in cached if candle.end >= session_start]
+            current_session_cached = [
+                candle for candle in cached if candle.end >= session_start
+            ]
             if len(cached) >= MINIMUM_INDICATOR_CANDLES and self._covers_session(
                 current_session_cached,
                 session_start=session_start,
@@ -85,12 +92,16 @@ class HistoricalDataLoader:
                     continuous=False,
                     oi=False,
                 )
-                candles = [_row_to_candle(symbol, row, timeframe_minutes) for row in rows]
+                candles = [
+                    _row_to_candle(symbol, row, timeframe_minutes) for row in rows
+                ]
                 for candle in candles:
                     try:
                         self.database.store_market_data(candle)
                     except Exception as db_exc:
-                        logger.warning("Historical candle store failed for %s: %s", symbol, db_exc)
+                        logger.warning(
+                            "Historical candle store failed for %s: %s", symbol, db_exc
+                        )
                         break
                 logger.info(
                     "Fetched historical candles for %s | count=%s | attempt=%s | session_start=%s",
@@ -111,10 +122,15 @@ class HistoricalDataLoader:
                 )
 
         if last_error is not None:
-            logger.warning("Historical fetch exhausted for %s, using partial cache if available.", symbol)
+            logger.warning(
+                "Historical fetch exhausted for %s, using partial cache if available.",
+                symbol,
+            )
 
         try:
-            cached = self.database.get_recent_candles(symbol=symbol, limit=MAX_STARTUP_CANDLES)
+            cached = self.database.get_recent_candles(
+                symbol=symbol, limit=MAX_STARTUP_CANDLES
+            )
             cached = [candle for candle in cached if candle.end <= session_end]
             return cached[-MAX_STARTUP_CANDLES:]
         except Exception:
@@ -170,7 +186,9 @@ def session_window_ist(
             second=0,
             microsecond=0,
         )
-    last_completed_end = round_down_to_last_completed_interval(current_ist, timeframe_minutes)
+    last_completed_end = round_down_to_last_completed_interval(
+        current_ist, timeframe_minutes
+    )
     return session_start.replace(tzinfo=None), last_completed_end.replace(tzinfo=None)
 
 
@@ -187,7 +205,9 @@ def history_window_start_ist(
     return session_end - timedelta(days=lookback_days)
 
 
-def round_down_to_last_completed_interval(current_time: datetime, timeframe_minutes: int) -> datetime:
+def round_down_to_last_completed_interval(
+    current_time: datetime, timeframe_minutes: int
+) -> datetime:
     minute_bucket = current_time.minute - (current_time.minute % timeframe_minutes)
     bucket_end = current_time.replace(minute=minute_bucket, second=0, microsecond=0)
     if bucket_end == current_time.replace(second=0, microsecond=0):

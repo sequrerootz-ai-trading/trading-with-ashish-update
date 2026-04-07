@@ -17,7 +17,6 @@ from data.kite_client import KiteClients
 from market_selector import resolve_instrument_selection
 from utils_console import YELLOW, colorize
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -107,12 +106,16 @@ class MarketDataService:
                 instrument_token=selection.instrument_token,
             )
             resolved.append(resolved_instrument)
-            self._token_to_symbol[resolved_instrument.instrument_token] = resolved_instrument.label
+            self._token_to_symbol[resolved_instrument.instrument_token] = (
+                resolved_instrument.label
+            )
 
         return resolved
 
     def _on_connect(self, ws: KiteTicker, response: dict) -> None:
-        tokens = [instrument.instrument_token for instrument in self._resolved_instruments]
+        tokens = [
+            instrument.instrument_token for instrument in self._resolved_instruments
+        ]
         symbol = self._resolved_instruments[0].label
         mode = get_mode()
         logger.info("[%s] Connected. Subscribing to instruments: %s", mode, tokens)
@@ -150,7 +153,9 @@ class MarketDataService:
 
             last_traded_quantity = int(tick.get("last_traded_quantity") or 0)
             current_volume = int(tick.get("volume_traded") or 0)
-            volume_increment = self._volume_increment(symbol, current_volume, last_traded_quantity)
+            volume_increment = self._volume_increment(
+                symbol, current_volume, last_traded_quantity
+            )
 
             closed_candle = self.aggregator.update(
                 symbol=symbol,
@@ -252,4 +257,9 @@ class MarketDataService:
 
     @staticmethod
     def _default_on_candle(candle: Candle) -> None:
-        logger.info("Closed candle: %s %s close=%.2f", candle.symbol, candle.end.isoformat(), candle.close)
+        logger.info(
+            "Closed candle: %s %s close=%.2f",
+            candle.symbol,
+            candle.end.isoformat(),
+            candle.close,
+        )

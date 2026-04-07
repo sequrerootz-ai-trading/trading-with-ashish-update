@@ -3,9 +3,13 @@ from __future__ import annotations
 import logging
 
 from strategy.common.indicators import calculate_atr, calculate_indicators
-from strategy.common.signal_types import GeneratedSignal, IndicatorDetails, SignalContext, SignalDetails
+from strategy.common.signal_types import (
+    GeneratedSignal,
+    IndicatorDetails,
+    SignalContext,
+    SignalDetails,
+)
 from strategy.sensex.option_helper import build_trade_levels, select_sensex_option
-
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +21,12 @@ STRONG_BREAK_THRESHOLD = 0.15
 WEAK_BREAK_THRESHOLD = 0.10
 
 
+# =========================
+# BLOCK 1: SENSEX Market Data
+# Responsibility: Process latest SENSEX candle and extract key values
+# Inputs: raw candle data
+# Outputs: open, high, low, close, prev_high, prev_low
+# =========================
 def build_sensex_decision(
     symbol: str,
     data: SignalContext,
@@ -87,7 +97,10 @@ def build_sensex_decision(
         target_points = atr * 1.8
     logger.info(f"ATR={atr}, SL={stoploss_points}, Target={target_points}")
 
-    if SIDEWAYS_RSI_LOW <= rsi <= SIDEWAYS_RSI_HIGH and break_strength < SIDEWAYS_BREAK_THRESHOLD:
+    if (
+        SIDEWAYS_RSI_LOW <= rsi <= SIDEWAYS_RSI_HIGH
+        and break_strength < SIDEWAYS_BREAK_THRESHOLD
+    ):
         return _no_trade_signal(
             symbol=symbol,
             current_candle=current_candle,
@@ -131,7 +144,9 @@ def build_sensex_decision(
             score=buy_score,
             speed_ok=speed_ok,
             reason_tag="bullish_trend_breakout",
-            failed_conditions=[name for name, passed in buy_checks.items() if not passed],
+            failed_conditions=[
+                name for name, passed in buy_checks.items() if not passed
+            ],
             target_points=target_points,
             stoploss_points=stoploss_points,
         )
@@ -149,12 +164,20 @@ def build_sensex_decision(
             score=sell_score,
             speed_ok=speed_ok,
             reason_tag="bearish_trend_breakdown",
-            failed_conditions=[name for name, passed in sell_checks.items() if not passed],
+            failed_conditions=[
+                name for name, passed in sell_checks.items() if not passed
+            ],
             target_points=target_points,
             stoploss_points=stoploss_points,
         )
 
-    failed_conditions = [name for name, passed in (buy_checks if buy_score >= sell_score else sell_checks).items() if not passed]
+    failed_conditions = [
+        name
+        for name, passed in (
+            buy_checks if buy_score >= sell_score else sell_checks
+        ).items()
+        if not passed
+    ]
     if weak_breakout:
         failed_conditions.append("breakout_strength")
     return _no_trade_signal(
@@ -171,6 +194,12 @@ def build_sensex_decision(
     )
 
 
+# =========================
+# BLOCK 2: Trend Detection (EMA)
+# Responsibility: Identify bullish/bearish trend using EMA 9 & 21
+# Inputs: close prices
+# Outputs: trend = Bullish / Bearish / Sideways
+# =========================
 def _build_trade_signal(
     symbol: str,
     current_candle,
@@ -262,6 +291,12 @@ def _build_trade_signal(
     )
 
 
+# =========================
+# BLOCK 3: Breakout Detection
+# Responsibility: Detect breakout using previous high/low with buffer
+# Inputs: prev_high, prev_low, current price
+# Outputs: breakout_type, breakout_strength
+# =========================
 def _no_trade_signal(
     symbol: str,
     current_candle,
@@ -330,24 +365,44 @@ def _no_trade_signal(
     )
 
 
+# =========================
+# BLOCK 4: Entry Logic
+# Responsibility: Confirm entry based on trend + breakout
+# Inputs: trend, breakout_strength
+# Outputs: BUY / SELL / NO_TRADE
+# =========================
 def _speed_filter(data: SignalContext) -> bool:
     recent_closes = [float(candle.close) for candle in data.candles[-4:]]
     if len(recent_closes) < 3:
         return False
     move = abs(recent_closes[-1] - recent_closes[0])
-    recent_ranges = [max(float(candle.high) - float(candle.low), 0.0) for candle in data.candles[-4:]]
+    recent_ranges = [
+        max(float(candle.high) - float(candle.low), 0.0) for candle in data.candles[-4:]
+    ]
     avg_range = (sum(recent_ranges) / len(recent_ranges)) if recent_ranges else 0.0
     live_price = float(data.live_price or data.last_price or recent_closes[-1])
     live_push = abs(live_price - recent_closes[-1])
     return move >= max(avg_range * 0.6, 2.0) or live_push >= max(avg_range * 0.2, 1.0)
 
 
+# =========================
+# BLOCK 5: Stoploss Logic (SENSEX Specific)
+# Responsibility: Calculate SL based on volatility (avoid tight SL in fast moves)
+# Inputs: entry price, swing levels
+# Outputs: stoploss
+# =========================
 def _trend_strength_pct(ema9: float, ema21: float, last_price: float) -> float:
     if last_price <= 0:
         return 0.0
     return abs(ema9 - ema21) / last_price * 100.0
 
 
+# =========================
+# BLOCK 6: Target Logic (SENSEX)
+# Responsibility: Calculate realistic target (15-30 points move)
+# Inputs: entry price
+# Outputs: target price
+# =========================
 def _build_reason(
     symbol: str,
     score: int,
@@ -368,5 +423,11 @@ def _build_reason(
     )
 
 
+# =========================
+# BLOCK 7: Trade Filters
+# Responsibility: Avoid weak breakout, fake spikes, or low momentum
+# Inputs: breakout_strength, candle size, EMA gap
+# Outputs: filter_pass = True/False
+# =========================
 def price_round(value: float) -> float:
     return round(value, 2)

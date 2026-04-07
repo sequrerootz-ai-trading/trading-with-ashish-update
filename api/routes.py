@@ -6,7 +6,6 @@ from fastapi.templating import Jinja2Templates
 
 from api.websocket_manager import web_socket_manager
 
-
 templates = Jinja2Templates(directory="templates")
 router = APIRouter()
 

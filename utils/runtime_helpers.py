@@ -43,7 +43,11 @@ def _print_trade_started(active_trade) -> None:
         f"Bought {active_trade.trading_symbol} at {_fmt_rupee(active_trade.entry_price or active_trade.entry_high)}",
         f"Qty: {active_trade.quantity}",
         f"Initial SL: {_fmt_rupee(active_trade.stop_loss)}",
-        f"Target: {_fmt_rupee(active_trade.target_price)}" if active_trade.target_price is not None else "Target: Open",
+        (
+            f"Target: {_fmt_rupee(active_trade.target_price)}"
+            if active_trade.target_price is not None
+            else "Target: Open"
+        ),
         f"Regime: {active_trade.regime} | RR: {active_trade.rr_ratio:.2f}",
     ]
     print(colorize("\n".join(lines), _mode_color(), bold=True))
@@ -75,7 +79,9 @@ def _print_trade_running(active_trade, current_price: float) -> None:
         f"LTP: {_fmt_rupee(current_price)} | SL: {_fmt_rupee(active_trade.stop_loss)} | PnL: {pnl_text}",
     ]
     if active_trade.target_price is not None:
-        lines.append(f"Target: {_fmt_rupee(active_trade.target_price)} | Realized: {_fmt_rupee(active_trade.realized_pnl)}")
+        lines.append(
+            f"Target: {_fmt_rupee(active_trade.target_price)} | Realized: {_fmt_rupee(active_trade.realized_pnl)}"
+        )
     print(colorize("\n".join(lines), _mode_color(), bold=True))
 
 
@@ -117,4 +123,3 @@ def _print_skip(message: str) -> None:
 
 def _print_blocked(message: str) -> None:
     print(colorize(f"[{_mode_label()} BLOCKED] {message}", RED, bold=True))
-

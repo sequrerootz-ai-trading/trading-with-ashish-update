@@ -40,6 +40,7 @@ def _is_valid_signal(signal: GeneratedSignal) -> bool:
 # MCX FILTERS
 # -----------------------------
 
+
 def _get_confidence_threshold(data: SignalContext) -> float:
     if data.timeframe_minutes <= 3:
         return SCALPING_CONFIDENCE_THRESHOLD
@@ -48,7 +49,9 @@ def _get_confidence_threshold(data: SignalContext) -> float:
     return DEFAULT_CONFIDENCE_THRESHOLD
 
 
-def _passes_confidence_filter(signal: GeneratedSignal, data: SignalContext) -> tuple[bool, str]:
+def _passes_confidence_filter(
+    signal: GeneratedSignal, data: SignalContext
+) -> tuple[bool, str]:
     threshold = _get_confidence_threshold(data)
     strict_floor = threshold - STRICT_REJECTION_BUFFER
     if signal.confidence < strict_floor:
@@ -65,7 +68,11 @@ def _check_daily_trade_limit(
 ) -> tuple[bool, str]:
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     count = _daily_trade_counts[symbol][today]
-    effective_limit = SCALPING_MAX_TRADES_PER_DAY if data.timeframe_minutes <= 3 else max(max_trades, STANDARD_MAX_TRADES_PER_DAY)
+    effective_limit = (
+        SCALPING_MAX_TRADES_PER_DAY
+        if data.timeframe_minutes <= 3
+        else max(max_trades, STANDARD_MAX_TRADES_PER_DAY)
+    )
     if count >= effective_limit:
         return False, f"daily_limit_reached_{count}"
     return True, f"trades_today_{count}"
@@ -88,7 +95,9 @@ def _has_strong_candle(data: SignalContext) -> bool:
     return body >= (candle_range * MIN_CANDLE_BODY_RATIO)
 
 
-def _passes_direction_flip_control(symbol: str, signal: GeneratedSignal) -> tuple[bool, str]:
+def _passes_direction_flip_control(
+    symbol: str, signal: GeneratedSignal
+) -> tuple[bool, str]:
     previous_signal = _last_signal_direction.get(symbol)
     if previous_signal is None or previous_signal == signal.signal:
         return True, "direction_ok"
@@ -101,7 +110,7 @@ def _get_trend_bias(data: SignalContext) -> str:
     symbol_config = get_symbol_config(data.symbol)
     ema_fast_period = int(symbol_config["ema_fast"])
     ema_slow_period = int(symbol_config["ema_slow"])
-    closes = [c.close for c in data.candles[-max(ema_slow_period + 5, 15):]]
+    closes = [c.close for c in data.candles[-max(ema_slow_period + 5, 15) :]]
     if len(closes) < ema_slow_period:
         return "NEUTRAL"
 
@@ -143,25 +152,46 @@ def _is_market_active(data: SignalContext) -> bool:
 # MCX OPTION CONFIRMATION
 # -----------------------------
 
-def _option_chain_score(option_chain: list[dict] | None, signal_type: str) -> tuple[bool, str]:
+
+def _option_chain_score(
+    option_chain: list[dict] | None, signal_type: str
+) -> tuple[bool, str]:
     if not option_chain:
         return True, "option_data_unavailable"
 
     normalized_signal = str(signal_type or "").strip().upper()
-    option_type = "CE" if normalized_signal == "BUY" else "PE" if normalized_signal == "SELL" else None
+    option_type = (
+        "CE"
+        if normalized_signal == "BUY"
+        else "PE" if normalized_signal == "SELL" else None
+    )
     if option_type is None:
         return False, "weak_option_flow"
 
     price_changes: list[float] = []
     oi_changes: list[float] = []
     for item in option_chain:
-        item_option_type = str(item.get("type") or item.get("option_type") or "").strip().upper()
+        item_option_type = (
+            str(item.get("type") or item.get("option_type") or "").strip().upper()
+        )
         if item_option_type != option_type:
             continue
 
-        ltp = _safe_float(item.get("ltp") or item.get("premium") or item.get("last_price"), 0.0) or 0.0
-        previous_ltp = _safe_float(item.get("previous_ltp") or item.get("prev_ltp") or item.get("close") or item.get("previous_close"))
-        oi_change = _safe_float(item.get("oi_change") or item.get("change_in_oi"), 0.0) or 0.0
+        ltp = (
+            _safe_float(
+                item.get("ltp") or item.get("premium") or item.get("last_price"), 0.0
+            )
+            or 0.0
+        )
+        previous_ltp = _safe_float(
+            item.get("previous_ltp")
+            or item.get("prev_ltp")
+            or item.get("close")
+            or item.get("previous_close")
+        )
+        oi_change = (
+            _safe_float(item.get("oi_change") or item.get("change_in_oi"), 0.0) or 0.0
+        )
         if ltp <= 0:
             continue
         if previous_ltp is not None:
@@ -171,7 +201,9 @@ def _option_chain_score(option_chain: list[dict] | None, signal_type: str) -> tu
     if not oi_changes:
         return True, "option_data_unavailable"
 
-    avg_price_change = (sum(price_changes) / len(price_changes)) if price_changes else 0.0
+    avg_price_change = (
+        (sum(price_changes) / len(price_changes)) if price_changes else 0.0
+    )
     avg_oi_change = sum(oi_changes) / len(oi_changes)
     if avg_price_change > 0 and avg_oi_change > 0:
         return True, "strong_option_flow"
@@ -182,21 +214,39 @@ def _option_chain_score(option_chain: list[dict] | None, signal_type: str) -> tu
     return False, "weak_option_flow"
 
 
-def _select_best_option(option_chain: list[dict] | None, signal_type: str, spot_price: float) -> dict | None:
+def _select_best_option(
+    option_chain: list[dict] | None, signal_type: str, spot_price: float
+) -> dict | None:
     if not option_chain:
         return None
 
     normalized_signal = str(signal_type or "").strip().upper()
-    option_type = "CE" if normalized_signal == "BUY" else "PE" if normalized_signal == "SELL" else None
+    option_type = (
+        "CE"
+        if normalized_signal == "BUY"
+        else "PE" if normalized_signal == "SELL" else None
+    )
     if option_type is None:
         return None
 
-    strikes = sorted({int(round(float(item.get("strike") or 0))) for item in option_chain if float(item.get("strike") or 0) > 0})
+    strikes = sorted(
+        {
+            int(round(float(item.get("strike") or 0)))
+            for item in option_chain
+            if float(item.get("strike") or 0) > 0
+        }
+    )
     if not strikes:
         return None
 
     atm_strike = min(strikes, key=lambda strike: abs(strike - float(spot_price)))
-    deltas = sorted({right - left for left, right in zip(strikes, strikes[1:]) if (right - left) > 0})
+    deltas = sorted(
+        {
+            right - left
+            for left, right in zip(strikes, strikes[1:])
+            if (right - left) > 0
+        }
+    )
     strike_step = deltas[0] if deltas else 100
     allowed_distance = strike_step * 3
 
@@ -204,35 +254,58 @@ def _select_best_option(option_chain: list[dict] | None, signal_type: str, spot_
     for item in option_chain:
         try:
             strike = int(round(float(item.get("strike") or 0)))
-            ltp = float(item.get("ltp") or item.get("premium") or item.get("last_price") or 0.0)
+            ltp = float(
+                item.get("ltp") or item.get("premium") or item.get("last_price") or 0.0
+            )
             volume = float(item.get("volume") or 0.0)
             oi_change = float(item.get("oi_change") or item.get("change_in_oi") or 0.0)
         except (TypeError, ValueError):
             continue
 
-        item_type = str(item.get("type") or item.get("option_type") or "").strip().upper()
+        item_type = (
+            str(item.get("type") or item.get("option_type") or "").strip().upper()
+        )
         if item_type != option_type or strike <= 0 or ltp <= 0:
             continue
         if abs(strike - atm_strike) > allowed_distance:
             continue
 
-        bid = _safe_float(item.get("bid") or item.get("buy_price") or item.get("best_bid"))
-        ask = _safe_float(item.get("ask") or item.get("sell_price") or item.get("best_ask"))
-        spread = (ask - bid) if bid is not None and ask is not None and ask >= bid else 0.0
-        spread_ok = True if bid is None or ask is None or ltp <= 0 else (spread / ltp) < 0.08
+        bid = _safe_float(
+            item.get("bid") or item.get("buy_price") or item.get("best_bid")
+        )
+        ask = _safe_float(
+            item.get("ask") or item.get("sell_price") or item.get("best_ask")
+        )
+        spread = (
+            (ask - bid) if bid is not None and ask is not None and ask >= bid else 0.0
+        )
+        spread_ok = (
+            True if bid is None or ask is None or ltp <= 0 else (spread / ltp) < 0.08
+        )
         if ltp < 30 or volume < 5 or not spread_ok:
             continue
 
-        previous_ltp = _safe_float(item.get("previous_ltp") or item.get("prev_ltp") or item.get("close") or item.get("previous_close"))
+        previous_ltp = _safe_float(
+            item.get("previous_ltp")
+            or item.get("prev_ltp")
+            or item.get("close")
+            or item.get("previous_close")
+        )
         price_change = _safe_float(item.get("change"), 0.0) or 0.0
         has_price_reference = previous_ltp is not None or abs(price_change) > 0
-        premium_rising = (previous_ltp is not None and ltp > previous_ltp) or price_change > 0
+        premium_rising = (
+            previous_ltp is not None and ltp > previous_ltp
+        ) or price_change > 0
         if has_price_reference and not premium_rising:
             continue
 
         iv = _safe_float(item.get("iv") or item.get("implied_volatility"))
         previous_iv = _safe_float(item.get("previous_iv") or item.get("prev_iv"))
-        iv_ok = True if iv is None or previous_iv is None else iv >= (previous_iv * (1 - IV_DROP_TOLERANCE))
+        iv_ok = (
+            True
+            if iv is None or previous_iv is None
+            else iv >= (previous_iv * (1 - IV_DROP_TOLERANCE))
+        )
         if not iv_ok:
             continue
 
@@ -283,23 +356,47 @@ def _is_premium_trending_up(option_data: dict[str, object] | None) -> bool:
     if not option_data:
         return False
 
-    option_key = str(option_data.get("tradingsymbol") or f"{option_data.get('strike')}_{option_data.get('option_type')}")
-    current_ltp = _safe_float(option_data.get("ltp") or option_data.get("premium") or option_data.get("last_price"), 0.0) or 0.0
+    option_key = str(
+        option_data.get("tradingsymbol")
+        or f"{option_data.get('strike')}_{option_data.get('option_type')}"
+    )
+    current_ltp = (
+        _safe_float(
+            option_data.get("ltp")
+            or option_data.get("premium")
+            or option_data.get("last_price"),
+            0.0,
+        )
+        or 0.0
+    )
     if current_ltp <= 0:
         return False
 
     history = _OPTION_LTP_HISTORY[option_key]
     history.append(round(current_ltp, 2))
 
-    provided_history = option_data.get("ltp_history") or option_data.get("price_history") or []
-    normalized_history = [value for value in (_safe_float(value) for value in provided_history) if value is not None]
-    series = normalized_history[-2:] + list(history) if normalized_history else list(history)
+    provided_history = (
+        option_data.get("ltp_history") or option_data.get("price_history") or []
+    )
+    normalized_history = [
+        value
+        for value in (_safe_float(value) for value in provided_history)
+        if value is not None
+    ]
+    series = (
+        normalized_history[-2:] + list(history) if normalized_history else list(history)
+    )
     if len(series) >= 3:
         return series[-1] > series[-2] >= series[-3]
     if len(series) >= 2:
         return series[-1] > series[-2]
 
-    previous_ltp = _safe_float(option_data.get("previous_ltp") or option_data.get("prev_ltp") or option_data.get("close") or option_data.get("previous_close"))
+    previous_ltp = _safe_float(
+        option_data.get("previous_ltp")
+        or option_data.get("prev_ltp")
+        or option_data.get("close")
+        or option_data.get("previous_close")
+    )
     return previous_ltp is not None and current_ltp > previous_ltp
 
 
@@ -308,7 +405,9 @@ def _is_iv_confirmed(option_data: dict[str, object] | None) -> bool:
         return False
 
     iv = _safe_float(option_data.get("iv") or option_data.get("implied_volatility"))
-    previous_iv = _safe_float(option_data.get("previous_iv") or option_data.get("prev_iv"))
+    previous_iv = _safe_float(
+        option_data.get("previous_iv") or option_data.get("prev_iv")
+    )
     if iv is None or previous_iv is None:
         return True
     return iv >= (previous_iv * (1 - IV_DROP_TOLERANCE))
@@ -334,28 +433,55 @@ def _apply_option_context(
     )
     option_data = signal.context or {}
     confidence_boost = _safe_float(option_data.get("confidence_boost"), 0.0) or 0.0
-    signal = replace(signal, confidence=max(0.0, min(1.0, signal.confidence + (confidence_boost * 0.02))))
+    signal = replace(
+        signal,
+        confidence=max(0.0, min(1.0, signal.confidence + (confidence_boost * 0.02))),
+    )
 
     if not bool(option_data.get("option_available")):
-        logger.info("[FALLBACK] Option confirmation unavailable -> using underlying-only signal")
+        logger.info(
+            "[FALLBACK] Option confirmation unavailable -> using underlying-only signal"
+        )
         fallback_logged = True
         if RELAXED_OPTION_MODE:
             confidence_reasons.append("Fallback: Option data not available")
         else:
-            return GeneratedSignal(symbol, signal.timestamp, "NO_TRADE", "no_valid_option", signal.confidence), {}
+            return (
+                GeneratedSignal(
+                    symbol,
+                    signal.timestamp,
+                    "NO_TRADE",
+                    "no_valid_option",
+                    signal.confidence,
+                ),
+                {},
+            )
     else:
         confidence_reasons.append("Option confirmation available")
 
     flow_ok, flow_reason = _option_chain_score(option_chain, signal.signal)
     if not flow_ok:
-        signal = replace(signal, confidence=max(0.0, min(1.0, signal.confidence - 0.05)))
+        signal = replace(
+            signal, confidence=max(0.0, min(1.0, signal.confidence - 0.05))
+        )
 
     best_option = _select_best_option(option_chain, signal.signal, spot_price)
     if best_option is None:
         if not RELAXED_OPTION_MODE:
-            return GeneratedSignal(symbol, signal.timestamp, "NO_TRADE", "no_valid_option", signal.confidence), {}
+            return (
+                GeneratedSignal(
+                    symbol,
+                    signal.timestamp,
+                    "NO_TRADE",
+                    "no_valid_option",
+                    signal.confidence,
+                ),
+                {},
+            )
         if not fallback_logged:
-            logger.info("[FALLBACK] No valid option contract -> using underlying-only signal")
+            logger.info(
+                "[FALLBACK] No valid option contract -> using underlying-only signal"
+            )
         if "Fallback: Option data not available" not in confidence_reasons:
             confidence_reasons.append("Fallback: Option data not available")
     else:
@@ -391,6 +517,7 @@ def _apply_option_context(
 # MCX VWAP / FINAL SCORING
 # -----------------------------
 
+
 def _compute_vwap(data: SignalContext) -> float | None:
     if not data.candles or data.last_candle is None:
         return None
@@ -411,7 +538,9 @@ def _compute_vwap(data: SignalContext) -> float | None:
         volume = _safe_float(getattr(candle, "volume", None), 0.0) or 0.0
         if volume <= 0:
             continue
-        typical_price = (float(candle.high) + float(candle.low) + float(candle.close)) / 3.0
+        typical_price = (
+            float(candle.high) + float(candle.low) + float(candle.close)
+        ) / 3.0
         total_price_volume += typical_price * volume
         total_volume += volume
 
@@ -420,10 +549,14 @@ def _compute_vwap(data: SignalContext) -> float | None:
     return vwap
 
 
-def _apply_vwap_strength(signal: GeneratedSignal, spot_price: float, data: SignalContext) -> tuple[GeneratedSignal, int, float | None]:
+def _apply_vwap_strength(
+    signal: GeneratedSignal, spot_price: float, data: SignalContext
+) -> tuple[GeneratedSignal, int, float | None]:
     strength = 0
     vwap = _compute_vwap(data)
-    signal_type = "CALL" if signal.signal == "BUY" else "PUT" if signal.signal == "SELL" else None
+    signal_type = (
+        "CALL" if signal.signal == "BUY" else "PUT" if signal.signal == "SELL" else None
+    )
 
     if vwap and vwap > 0:
         if signal_type == "CALL":
@@ -448,7 +581,9 @@ def _option_confirmation_passed(
     premium_rising = bool(option_state.get("premium_rising"))
     premium_trending = bool(option_state.get("premium_trending"))
     iv_confirmed = bool(option_state.get("iv_confirmed"))
-    signal_type = "CALL" if signal.signal == "BUY" else "PUT" if signal.signal == "SELL" else None
+    signal_type = (
+        "CALL" if signal.signal == "BUY" else "PUT" if signal.signal == "SELL" else None
+    )
 
     if not premium_rising:
         logger.info("[REJECTED] %s premium falling", signal_type or "OPTION")
@@ -487,7 +622,9 @@ def _finalize_signal(
         + (0.5 if option_state.get("premium_trending") else 0)
     )
     if final_score < 3:
-        return GeneratedSignal(symbol, signal.timestamp, "NO_TRADE", "low_final_score", signal.confidence)
+        return GeneratedSignal(
+            symbol, signal.timestamp, "NO_TRADE", "low_final_score", signal.confidence
+        )
 
     signal = replace(
         signal,
@@ -500,11 +637,23 @@ def _finalize_signal(
             "flow_reason": option_state.get("flow_reason"),
         },
     )
-    logger.info("[CONFIDENCE] Score=%.2f | Reasons=%s", signal.confidence, option_state.get("confidence_reasons") or ["base_signal"])
+    logger.info(
+        "[CONFIDENCE] Score=%.2f | Reasons=%s",
+        signal.confidence,
+        option_state.get("confidence_reasons") or ["base_signal"],
+    )
 
     _record_signal_fired(symbol, signal.signal)
-    reason = direction_reason if direction_reason != "direction_ok" else confidence_reason
-    logger.info("[MCX_SIGNAL] %s | %s | conf=%.2f | %s", symbol, signal.signal, signal.confidence, reason)
+    reason = (
+        direction_reason if direction_reason != "direction_ok" else confidence_reason
+    )
+    logger.info(
+        "[MCX_SIGNAL] %s | %s | conf=%.2f | %s",
+        symbol,
+        signal.signal,
+        signal.confidence,
+        reason,
+    )
     return signal
 
 
@@ -512,6 +661,152 @@ def _finalize_signal(
 # MAIN ENGINE
 # -----------------------------
 
+
+# =========================
+# BLOCK 1: MCX Engine Input Prep
+# Responsibility: Normalize engine inputs and check the daily trade limit
+# Inputs: symbol, data, sentiment, max trades
+# Outputs: symbol, timestamp, spot price, option chain, limit status
+# =========================
+def _prepare_mcx_engine_inputs(
+    symbol: str,
+    data: SignalContext,
+    sentiment: dict[str, object] | None,
+    max_trades_per_day: int,
+) -> tuple[str, str, float, object, bool, str]:
+    symbol = symbol.upper()
+    now_ts = datetime.now(UTC).isoformat()
+    last_candle = data.last_candle
+    spot_price = float(last_candle.close) if last_candle else 0.0
+    option_chain = (sentiment or {}).get("option_chain")
+    limit_ok, limit_reason = _check_daily_trade_limit(
+        symbol, data, max_trades=max_trades_per_day
+    )
+    return symbol, now_ts, spot_price, option_chain, limit_ok, limit_reason
+
+
+# =========================
+# BLOCK 2: MCX Core Execution
+# Responsibility: Run the MCX strategy and attach option context
+# Inputs: symbol, candle data, spot price, option chain
+# Outputs: signal, option_state, error
+# =========================
+def _run_mcx_core(
+    symbol: str,
+    data: SignalContext,
+    spot_price: float,
+    option_chain: list[dict] | None,
+) -> tuple[GeneratedSignal, dict[str, object], Exception | None]:
+    try:
+        signal = generate_mcx_signal(symbol, data)
+        signal, option_state = _apply_option_context(
+            symbol, signal, spot_price, option_chain
+        )
+        return signal, option_state, None
+    except Exception as exc:
+        return (
+            GeneratedSignal(
+                symbol,
+                datetime.now(UTC).isoformat(),
+                "NO_TRADE",
+                "strategy_exception",
+                0.0,
+            ),
+            {},
+            exc,
+        )
+
+
+# =========================
+# BLOCK 3: MCX Runtime Filters
+# Responsibility: Apply trend, candle, VWAP, direction, and option checks
+# Inputs: signal, option_state, spot price, latest candle context
+# Outputs: final accepted signal or NO_TRADE
+# =========================
+def _apply_mcx_runtime_filters(
+    symbol: str,
+    data: SignalContext,
+    signal: GeneratedSignal,
+    option_state: dict[str, object],
+    spot_price: float,
+    now_ts: str,
+) -> GeneratedSignal:
+    if signal.signal == "NO_TRADE":
+        return signal
+    if not _is_valid_signal(signal):
+        return GeneratedSignal(
+            symbol,
+            now_ts,
+            "NO_TRADE",
+            "invalid_signal",
+            float(getattr(signal, "confidence", 0.0) or 0.0),
+        )
+
+    trend = _get_trend_bias(data)
+    if trend != "NEUTRAL":
+        if signal.signal == "BUY" and trend != "BULLISH":
+            return GeneratedSignal(
+                symbol, now_ts, "NO_TRADE", "trend_misaligned", signal.confidence
+            )
+        if signal.signal == "SELL" and trend != "BEARISH":
+            return GeneratedSignal(
+                symbol, now_ts, "NO_TRADE", "trend_misaligned", signal.confidence
+            )
+
+    if not _has_strong_candle(data):
+        return GeneratedSignal(symbol, now_ts, "NO_TRADE", "weak_candle", 0.0)
+    if not _is_market_active(data):
+        return GeneratedSignal(symbol, now_ts, "NO_TRADE", "low_volatility", 0.0)
+    if not _is_breakout_strong(data):
+        return GeneratedSignal(symbol, now_ts, "NO_TRADE", "weak_breakout", 0.0)
+
+    signal, strength, vwap = _apply_vwap_strength(signal, spot_price, data)
+    if signal.signal == "BUY" and not (vwap and spot_price > vwap):
+        return GeneratedSignal(
+            symbol, now_ts, "NO_TRADE", "vwap_misaligned", signal.confidence
+        )
+    if signal.signal == "SELL" and not (vwap and spot_price < vwap):
+        return GeneratedSignal(
+            symbol, now_ts, "NO_TRADE", "vwap_misaligned", signal.confidence
+        )
+
+    direction_ok, direction_reason = _passes_direction_flip_control(symbol, signal)
+    if not direction_ok:
+        return GeneratedSignal(
+            symbol, now_ts, "NO_TRADE", direction_reason, signal.confidence
+        )
+
+    passes, confidence_reason = _passes_confidence_filter(signal, data)
+    if not passes:
+        signal = replace(
+            signal, confidence=max(0.0, min(1.0, signal.confidence - 0.05))
+        )
+
+    option_ok, option_reason = _option_confirmation_passed(
+        signal, option_state, spot_price, vwap
+    )
+    if not option_ok and option_reason is not None:
+        return GeneratedSignal(
+            symbol, now_ts, "NO_TRADE", option_reason, signal.confidence
+        )
+
+    return _finalize_signal(
+        symbol,
+        signal,
+        direction_reason,
+        confidence_reason,
+        strength,
+        vwap,
+        option_state,
+    )
+
+
+# =========================
+# BLOCK 4: MCX Signal Engine
+# Responsibility: Orchestrate the full MCX signal pipeline
+# Inputs: symbol, data, sentiment, max trades
+# Outputs: final GeneratedSignal
+# =========================
 def generate_mcx_signal_engine(
     symbol: str,
     data: SignalContext,
@@ -520,70 +815,41 @@ def generate_mcx_signal_engine(
 ) -> GeneratedSignal:
     latency_start = perf_counter()
     try:
-        symbol = symbol.upper()
-        now_ts = datetime.now(UTC).isoformat()
-        last_candle = data.last_candle
-        spot_price = float(last_candle.close) if last_candle else 0.0
-        option_chain = (sentiment or {}).get("option_chain")
-
-        limit_ok, limit_reason = _check_daily_trade_limit(symbol, data, max_trades=max_trades_per_day)
+        symbol, now_ts, spot_price, option_chain, limit_ok, limit_reason = (
+            _prepare_mcx_engine_inputs(
+                symbol=symbol,
+                data=data,
+                sentiment=sentiment,
+                max_trades_per_day=max_trades_per_day,
+            )
+        )
         if not limit_ok:
             return GeneratedSignal(symbol, now_ts, "NO_TRADE", limit_reason, 0.0)
 
-        try:
-            signal = generate_mcx_signal(symbol, data)
-            signal, option_state = _apply_option_context(symbol, signal, spot_price, option_chain)
-        except Exception as exc:
-            logger.error("[MCX_STRATEGY_ERROR] %s - %s", symbol, exc)
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", "strategy_exception", 0.0)
+        signal, option_state, error = _run_mcx_core(
+            symbol, data, spot_price, option_chain
+        )
+        if error is not None:
+            logger.error("[MCX_STRATEGY_ERROR] %s - %s", symbol, error)
+            return GeneratedSignal(
+                symbol, now_ts, "NO_TRADE", "strategy_exception", 0.0
+            )
 
-        if signal.signal == "NO_TRADE":
-            return signal
-        if not _is_valid_signal(signal):
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", "invalid_signal", float(getattr(signal, "confidence", 0.0) or 0.0))
-        trend = _get_trend_bias(data)
-
-        if trend != "NEUTRAL":
-            if signal.signal == "BUY" and trend != "BULLISH":
-                return GeneratedSignal(symbol, now_ts, "NO_TRADE", "trend_misaligned", signal.confidence)
-            if signal.signal == "SELL" and trend != "BEARISH":
-                return GeneratedSignal(symbol, now_ts, "NO_TRADE", "trend_misaligned", signal.confidence)
-        if not _has_strong_candle(data):
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", "weak_candle", 0.0)
-        if not _is_market_active(data):
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", "low_volatility", 0.0)
-        if not _is_breakout_strong(data):
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", "weak_breakout", 0.0)
-
-        # UPDATED
-        signal, strength, vwap = _apply_vwap_strength(signal, spot_price, data)
-        # UPDATED
-        if signal.signal == "BUY" and not (vwap and spot_price > vwap):
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", "vwap_misaligned", signal.confidence)
-        # UPDATED
-        if signal.signal == "SELL" and not (vwap and spot_price < vwap):
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", "vwap_misaligned", signal.confidence)
-
-        direction_ok, direction_reason = _passes_direction_flip_control(symbol, signal)
-        if not direction_ok:
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", direction_reason, signal.confidence)
-
-        passes, confidence_reason = _passes_confidence_filter(signal, data)
-        if not passes:
-            signal = replace(signal, confidence=max(0.0, min(1.0, signal.confidence - 0.05)))
-
-        option_ok, option_reason = _option_confirmation_passed(signal, option_state, spot_price, vwap)
-        if not option_ok and option_reason is not None:
-            return GeneratedSignal(symbol, now_ts, "NO_TRADE", option_reason, signal.confidence)
-
-        return _finalize_signal(symbol, signal, direction_reason, confidence_reason, strength, vwap, option_state)
+        return _apply_mcx_runtime_filters(
+            symbol, data, signal, option_state, spot_price, now_ts
+        )
     finally:
-        logger.info("[MCX_LATENCY] %s | %.2fms", symbol, (perf_counter() - latency_start) * 1000.0)
+        logger.info(
+            "[MCX_LATENCY] %s | %.2fms",
+            symbol,
+            (perf_counter() - latency_start) * 1000.0,
+        )
 
 
 # -----------------------------
 # STORAGE
 # -----------------------------
+
 
 def get_last_closed_candle(symbol: str, database: TradingDatabase) -> Candle | None:
     return database.get_last_closed_candle(symbol)
@@ -594,7 +860,9 @@ def store_market_data(data: Candle, database: TradingDatabase) -> bool:
 
 
 def store_signal(signal: GeneratedSignal, database: TradingDatabase) -> None:
-    database.store_signal(signal.symbol, signal.timestamp or "", signal.signal, signal.reason)
+    database.store_signal(
+        signal.symbol, signal.timestamp or "", signal.signal, signal.reason
+    )
 
 
 def _safe_float(value, default: float | None = None) -> float | None:

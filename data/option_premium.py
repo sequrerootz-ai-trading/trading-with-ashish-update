@@ -6,7 +6,6 @@ from datetime import date, datetime
 
 from kiteconnect import KiteConnect
 
-
 logger = logging.getLogger(__name__)
 OPTION_EXCHANGES = ("NFO", "BFO")
 OPTION_SEGMENTS = {"NFO": "NFO-OPT", "BFO": "BFO-OPT"}
@@ -31,7 +30,9 @@ class OptionPremiumService:
         self._instrument_cache: dict[str, list[dict]] = {}
         self._instrument_cache_date: dict[str, date] = {}
 
-    def get_contract_quote(self, trading_symbol: str, exchange: str) -> PremiumQuote | None:
+    def get_contract_quote(
+        self, trading_symbol: str, exchange: str
+    ) -> PremiumQuote | None:
         exchange_symbol = f"{exchange}:{trading_symbol}"
         quote = self._fetch_quote_snapshot(exchange_symbol)
         if not quote:
@@ -81,7 +82,9 @@ class OptionPremiumService:
             )
             return None
 
-        exchange_symbol = f"{option_contract['exchange']}:{option_contract['tradingsymbol']}"
+        exchange_symbol = (
+            f"{option_contract['exchange']}:{option_contract['tradingsymbol']}"
+        )
         quote = self._fetch_quote_snapshot(exchange_symbol)
         if not quote:
             logger.warning("No premium quote returned for %s", exchange_symbol)
@@ -92,7 +95,12 @@ class OptionPremiumService:
         logger.info(
             "[OPTION_DATA] %s %s %s | LTP=%.2f | Volume=%s | OI=%s",
             normalized_symbol,
-            int(normalized_strike) if normalized_strike is not None and float(normalized_strike).is_integer() else normalized_strike,
+            (
+                int(normalized_strike)
+                if normalized_strike is not None
+                and float(normalized_strike).is_integer()
+                else normalized_strike
+            ),
             instrument_type,
             float(quote["last_price"]),
             _fmt_optional_number(quote.get("volume")),
@@ -133,20 +141,38 @@ class OptionPremiumService:
         if not candidates:
             return None
 
-        valid_expiries = sorted({row["expiry"] for row in candidates if row["expiry"] >= reference_date})
+        valid_expiries = sorted(
+            {row["expiry"] for row in candidates if row["expiry"] >= reference_date}
+        )
         if not valid_expiries:
             valid_expiries = sorted({row["expiry"] for row in candidates})
         if not valid_expiries:
             return None
 
         preferred_expiry = self._select_preferred_expiry(valid_expiries, reference_date)
-        expiry_candidates = [row for row in candidates if row.get("expiry") == preferred_expiry]
+        expiry_candidates = [
+            row for row in candidates if row.get("expiry") == preferred_expiry
+        ]
         if not expiry_candidates:
-            expiry_candidates = [row for row in candidates if row.get("expiry") == valid_expiries[0]]
+            expiry_candidates = [
+                row for row in candidates if row.get("expiry") == valid_expiries[0]
+            ]
 
-        target_strikes = _preferred_strikes_for_spot(spot_price, instrument_type, expiry_candidates)
-        available_strikes = sorted({_normalized_option_strike(row) for row in expiry_candidates if _normalized_option_strike(row) is not None})
-        atm_strike = min(available_strikes, key=lambda strike: abs(strike - spot_price)) if available_strikes else None
+        target_strikes = _preferred_strikes_for_spot(
+            spot_price, instrument_type, expiry_candidates
+        )
+        available_strikes = sorted(
+            {
+                _normalized_option_strike(row)
+                for row in expiry_candidates
+                if _normalized_option_strike(row) is not None
+            }
+        )
+        atm_strike = (
+            min(available_strikes, key=lambda strike: abs(strike - spot_price))
+            if available_strikes
+            else None
+        )
         expiry_candidates.sort(
             key=lambda row: (
                 0 if (_normalized_option_strike(row) in target_strikes) else 1,
@@ -168,10 +194,16 @@ class OptionPremiumService:
             )
         return selected_contract
 
-    def _select_preferred_expiry(self, expiries: list[date], reference_date: date) -> date:
+    def _select_preferred_expiry(
+        self, expiries: list[date], reference_date: date
+    ) -> date:
         if not expiries:
             raise ValueError("expiries cannot be empty")
-        if reference_date == expiries[0] and datetime.now().hour >= 13 and len(expiries) > 1:
+        if (
+            reference_date == expiries[0]
+            and datetime.now().hour >= 13
+            and len(expiries) > 1
+        ):
             return expiries[1]
         return expiries[0]
 
@@ -184,7 +216,6 @@ class OptionPremiumService:
             self._instrument_cache[exchange] = instruments
             self._instrument_cache_date[exchange] = reference_date
         return instruments
-
 
     def _fetch_quote_snapshot(self, exchange_symbol: str) -> dict | None:
         try:
@@ -199,8 +230,16 @@ class OptionPremiumService:
         return ltp_response.get(exchange_symbol)
 
 
-def _preferred_strikes_for_spot(spot_price: float, instrument_type: str, contracts: list[dict]) -> set[float]:
-    strikes = sorted({_normalized_option_strike(row) for row in contracts if _normalized_option_strike(row) is not None})
+def _preferred_strikes_for_spot(
+    spot_price: float, instrument_type: str, contracts: list[dict]
+) -> set[float]:
+    strikes = sorted(
+        {
+            _normalized_option_strike(row)
+            for row in contracts
+            if _normalized_option_strike(row) is not None
+        }
+    )
     if not strikes:
         return set()
     atm = min(strikes, key=lambda strike: abs(strike - spot_price))
@@ -227,7 +266,10 @@ def _option_name_matches(row: dict, symbol: str) -> bool:
             normalized_alias = _normalize_symbol_key(alias)
             if candidate == alias or candidate.startswith(alias):
                 return True
-            if normalized_candidate == normalized_alias or normalized_candidate.startswith(normalized_alias):
+            if (
+                normalized_candidate == normalized_alias
+                or normalized_candidate.startswith(normalized_alias)
+            ):
                 return True
     return False
 

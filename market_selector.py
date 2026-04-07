@@ -60,8 +60,12 @@ def get_instrument_config(symbol: str, settings: Settings) -> InstrumentConfig:
     raise ValueError(f"Instrument config not found for symbol={symbol}")
 
 
-def get_instrument_token(symbol: str, market_type: str, kite: KiteConnect, settings: Settings) -> int:
-    return resolve_instrument_selection(symbol, market_type, kite, settings).instrument_token
+def get_instrument_token(
+    symbol: str, market_type: str, kite: KiteConnect, settings: Settings
+) -> int:
+    return resolve_instrument_selection(
+        symbol, market_type, kite, settings
+    ).instrument_token
 
 
 def resolve_instrument_selection(
@@ -110,8 +114,14 @@ def _select_mcx_future(symbol: str, rows: list[dict]) -> dict | None:
     return candidates[0]
 
 
-def _select_equity_instrument(instrument: InstrumentConfig, kite: KiteConnect) -> dict | None:
-    exchanges = [instrument.exchange] if instrument.exchange not in {"", "AUTO"} else ["NSE", "BSE"]
+def _select_equity_instrument(
+    instrument: InstrumentConfig, kite: KiteConnect
+) -> dict | None:
+    exchanges = (
+        [instrument.exchange]
+        if instrument.exchange not in {"", "AUTO"}
+        else ["NSE", "BSE"]
+    )
     aliases = _equity_aliases(instrument)
 
     best_match: dict | None = None
@@ -139,7 +149,9 @@ def _equity_aliases(instrument: InstrumentConfig) -> list[str]:
     return combined
 
 
-def _equity_match_score(row: dict, instrument: InstrumentConfig, aliases: list[str], exchange: str) -> int:
+def _equity_match_score(
+    row: dict, instrument: InstrumentConfig, aliases: list[str], exchange: str
+) -> int:
     tradingsymbol = str(row.get("tradingsymbol") or "").upper()
     name = str(row.get("name") or "").upper()
     segment = str(row.get("segment") or "").upper()
@@ -155,7 +167,9 @@ def _equity_match_score(row: dict, instrument: InstrumentConfig, aliases: list[s
     if score < 0:
         return -1
 
-    if instrument.segment == "INDEX" and (segment.endswith("INDICES") or instrument_type == "INDEX"):
+    if instrument.segment == "INDEX" and (
+        segment.endswith("INDICES") or instrument_type == "INDEX"
+    ):
         score += 20
     elif instrument.segment in {"AUTO", "CASH"} and instrument_type == "EQ":
         score += 15

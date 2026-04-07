@@ -3,7 +3,6 @@ from __future__ import annotations
 from execution.option_selector import get_current_weekly_expiry, round_to_nearest_strike
 from strategy.common.signal_types import OptionSuggestion
 
-
 STRIKE_OFFSETS = {
     "BUY_CE": 0,
     "BUY_PE": 0,
