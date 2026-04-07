@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from config import get_market_type
+from config.symbol_config import get_symbol_config
 from data.candle_store import Candle
 from data.database import TradingDatabase
 from strategy.nifty.signal_engine import generate_equity_signal_engine
+from strategy.sensex.signal_engine import generate_sensex_signal_engine
 from strategy.mcx.signal_engine import generate_mcx_signal_engine
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 
@@ -15,9 +16,11 @@ def generate_signal(
     sentiment: dict[str, object] | None = None,
     max_trades_per_day: int = 10,
 ) -> GeneratedSignal:
-    normalized_market_type = (market_type or get_market_type()).strip().upper()
+    normalized_market_type = str(market_type or get_symbol_config(symbol)["market"]).strip().upper()
     if normalized_market_type == "MCX":
         return generate_mcx_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
+    if symbol.strip().upper() == "SENSEX":
+        return generate_sensex_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
     return generate_equity_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
 
 

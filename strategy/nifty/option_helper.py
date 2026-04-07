@@ -4,6 +4,7 @@ import logging
 from dataclasses import replace
 
 from config import get_mode
+from config.symbol_config import get_symbol_config
 from data.option_premium import PremiumQuote
 from engine.signal_engine import evaluate_nifty_price_action
 from services.option_selector import select_nifty_option
@@ -37,6 +38,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         )
 
     analysis = evaluate_nifty_price_action(data)
+    symbol_config = get_symbol_config(data.symbol)
     current_candle = data.last_candle
     trend = str(analysis["trend"])
     bullish_break = bool(analysis["bullish_break"])
@@ -78,6 +80,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     signal = "NO_TRADE"
     confidence = 0.0
     reason: list[str] = []
+    min_break_strength = float(symbol_config["min_break_strength"])
 
     if trend == "bullish" and bullish_break and close_position >= bullish_close_threshold and bullish_score >= 3 and (strong_bullish_break or not bullish_rsi_exhausted or (momentum_ok and volume_ok)):
         if bullish_rsi_extended:
@@ -102,6 +105,25 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     ema9 = float(analysis["ema_9"]) if analysis["ema_9"] is not None else 0.0
     ema21 = float(analysis["ema_21"]) if analysis["ema_21"] is not None else 0.0
     close_pos = close_position
+    current_close = float(current_candle.close)
+    ema_diff_pct = (abs(ema9 - ema21) / max(current_close, 0.01)) * 100.0 if ema9 > 0 and ema21 > 0 else 0.0
+    sideways_market = ema_diff_pct < (min_break_strength * 0.5)
+    bullish_filter_conditions = {
+        "momentum": rsi > 55.0,
+        "break_strength": break_strength >= min_break_strength,
+        "candle_confirmation": current_close > float(previous_candle.high),
+        "trend_alignment": ema9 > ema21,
+        "sideways_filter": not sideways_market,
+    }
+    bearish_filter_conditions = {
+        "momentum": rsi < 45.0,
+        "break_strength": break_strength >= min_break_strength,
+        "candle_confirmation": current_close < float(previous_candle.low),
+        "trend_alignment": ema9 < ema21,
+        "sideways_filter": not sideways_market,
+    }
+    bullish_filter_score = sum(1 for passed in bullish_filter_conditions.values() if passed)
+    bearish_filter_score = sum(1 for passed in bearish_filter_conditions.values() if passed)
     confidence_trend = 0.2 if trend in {"bullish", "bearish"} and ema9 > 0 and ema21 > 0 else 0.0
     confidence_breakout = min(0.4, break_strength * 2.0) if break_strength > 0 else 0.0
     confidence_momentum = 0.15 if momentum_ok else 0.0
@@ -144,6 +166,13 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     elif trend_strong and momentum_ok:
         allow_trade = True
         decision_reason = "trend_aligned_breakout"
+
+    filter_conditions = bullish_filter_conditions if trend == "bullish" else bearish_filter_conditions if trend == "bearish" else {}
+    filter_score = bullish_filter_score if trend == "bullish" else bearish_filter_score if trend == "bearish" else 0
+    failed_conditions = [name for name, passed in filter_conditions.items() if not passed]
+    if allow_trade and filter_score < 4:
+        allow_trade = False
+        decision_reason = "multi_layer_filter_failed"
 
     option_entry_reason = decision_reason
     soft_setup_present = any("soft" in item for item in reason)
@@ -205,7 +234,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         signal = "NO_TRADE"
         decision_reason = option_entry_reason
         reason.append(decision_reason)
-    elif allow_trade and break_strength < 0.25 and momentum_ok:
+    elif allow_trade and break_strength < min_break_strength and momentum_ok:
         option_entry_reason = "no_price_expansion"
         signal = "NO_TRADE"
         decision_reason = option_entry_reason
@@ -237,6 +266,8 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             f"volatility_ok={volatility_ok}",
             f"close_pos={close_position:.2f}",
             f"break_reason={break_reason}",
+            f"score={filter_score}",
+            f"failed_conditions={','.join(failed_conditions) if failed_conditions else 'none'}",
         ]
     )
 
@@ -274,6 +305,12 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         breakout_level,
         breakdown_level,
         break_reason,
+    )
+    logger.info(
+        "[SYMBOL_FILTER] symbol=%s | score=%s | failed_conditions=%s",
+        data.symbol,
+        filter_score,
+        ",".join(failed_conditions) if failed_conditions else "none",
     )
     logger.info(
         "[CONFIDENCE] total=%.2f | trend=%.2f breakout=%.2f momentum=%.2f volume=%.2f volatility=%.2f close_pos=%.2f rsi=%.2f",

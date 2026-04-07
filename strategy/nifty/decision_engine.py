@@ -32,7 +32,7 @@ def build_equity_decision(symbol: str, data: SignalContext) -> GeneratedSignal:
     from strategy.common.indicators import calculate_indicators, detect_trend
 
     close_prices = [candle.close for candle in data.candles]
-    indicators = calculate_indicators(close_prices)
+    indicators = calculate_indicators(close_prices, symbol=symbol)
     current_candle = data.last_candle
     previous_candle = data.candles[-2]
 

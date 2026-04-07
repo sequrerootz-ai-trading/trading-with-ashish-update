@@ -13,8 +13,9 @@ Simple Python project that connects to Zerodha Kite, streams live ticks with `Ki
 
 ## Market Types
 
-- `MARKET_TYPE=EQUITY` supports `NIFTY`, `BANKNIFTY`, `RELIANCE`, `SBIN`, `PETRONET`
-- `MARKET_TYPE=MCX` supports `CRUDEOIL`, `NATURALGAS`, `GOLD`
+- `SYMBOL=NIFTY` supports equity index mode
+- `SYMBOL=SENSEX` supports BSE index mode
+- `SYMBOL=CRUDEOIL` supports MCX mode
 - The same runtime pipeline is used for both markets, while instrument resolution and signal logic switch automatically from `.env`
 
 ## Setup
@@ -27,7 +28,7 @@ pip install -r requirements.txt
 ```
 
 3. Copy `.env.example` to `.env` and fill in your Zerodha API credentials.
-4. Set `SYMBOL`, `MARKET_TYPE`, and optionally `CANDLE_INTERVAL_MINUTES=3` in `.env`.
+4. Set `SYMBOL` and optionally `CANDLE_INTERVAL_MINUTES=3` in `.env`.
 5. Run the app:
 
 ```bash

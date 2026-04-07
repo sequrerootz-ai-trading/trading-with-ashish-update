@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from time import perf_counter
 
+from config.symbol_config import get_symbol_config
 from data.candle_store import Candle
 from data.database import TradingDatabase
 from strategy.common.signal_types import GeneratedSignal, SignalContext
@@ -97,12 +98,15 @@ def _passes_direction_flip_control(symbol: str, signal: GeneratedSignal) -> tupl
 
 
 def _get_trend_bias(data: SignalContext) -> str:
-    closes = [c.close for c in data.candles[-15:]]
-    if len(closes) < 10:
+    symbol_config = get_symbol_config(data.symbol)
+    ema_fast_period = int(symbol_config["ema_fast"])
+    ema_slow_period = int(symbol_config["ema_slow"])
+    closes = [c.close for c in data.candles[-max(ema_slow_period + 5, 15):]]
+    if len(closes) < ema_slow_period:
         return "NEUTRAL"
 
-    ema_fast = sum(closes[-4:]) / 4
-    ema_slow = sum(closes[-10:]) / 10
+    ema_fast = sum(closes[-ema_fast_period:]) / ema_fast_period
+    ema_slow = sum(closes[-ema_slow_period:]) / ema_slow_period
 
     if ema_fast > ema_slow:
         return "BULLISH"

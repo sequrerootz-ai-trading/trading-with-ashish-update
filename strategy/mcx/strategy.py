@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from config.symbol_config import get_symbol_config
 from strategy.common.indicators import calculate_indicators, detect_trend
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 
@@ -26,7 +27,8 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
         )
 
     close_prices = [candle.close for candle in data.candles]
-    indicators = calculate_indicators(close_prices)
+    symbol_config = get_symbol_config(symbol)
+    indicators = calculate_indicators(close_prices, symbol=symbol)
 
     current_candle = data.last_candle
     previous_candle = data.candles[-2]
@@ -68,6 +70,26 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
     # UPDATED
     range_expansion_ok = current_range > average_range if average_range > 0 else current_range > 0
 
+    ema_diff_pct = (abs(float(indicators.ema_9 or 0.0) - float(indicators.ema_21 or 0.0)) / max(last_close, 0.01)) * 100.0
+    min_break_strength = float(symbol_config["min_break_strength"])
+    sideways_market = ema_diff_pct < (min_break_strength * 0.5)
+    bullish_filter_conditions = {
+        "momentum": float(indicators.rsi or 0.0) > 55.0,
+        "break_strength": max((buy_breakout_diff / max(last_close, 0.01)) * 100.0, 0.0) >= min_break_strength,
+        "candle_confirmation": last_close > float(previous_candle.high),
+        "trend_alignment": float(indicators.ema_9 or 0.0) > float(indicators.ema_21 or 0.0),
+        "sideways_filter": not sideways_market,
+    }
+    bearish_filter_conditions = {
+        "momentum": float(indicators.rsi or 100.0) < 45.0,
+        "break_strength": max((sell_breakout_diff / max(last_close, 0.01)) * 100.0, 0.0) >= min_break_strength,
+        "candle_confirmation": last_close < float(previous_candle.low),
+        "trend_alignment": float(indicators.ema_9 or 0.0) < float(indicators.ema_21 or 0.0),
+        "sideways_filter": not sideways_market,
+    }
+    bullish_filter_score = sum(1 for passed in bullish_filter_conditions.values() if passed)
+    bearish_filter_score = sum(1 for passed in bearish_filter_conditions.values() if passed)
+
     signal = "NO_TRADE"
     confidence = 0.0
     reason: list[str] = []
@@ -83,7 +105,7 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
     elif not range_expansion_ok:
         rejection_reason = "range_expansion_missing"
     # UPDATED
-    elif trend == "bullish" and (strict_buy_break or early_buy_break) and bullish_momentum:
+    elif trend == "bullish" and (strict_buy_break or early_buy_break) and bullish_momentum and bullish_filter_score >= 4:
         signal = "BUY"
         confidence = 0.62
         if strict_buy_break:
@@ -99,7 +121,7 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
         confidence = min(confidence, 0.82)
         rejection_reason = "accepted"
     # UPDATED
-    elif trend == "bearish" and (strict_sell_break or early_sell_break) and bearish_momentum:
+    elif trend == "bearish" and (strict_sell_break or early_sell_break) and bearish_momentum and bearish_filter_score >= 4:
         signal = "SELL"
         confidence = 0.62
         if strict_sell_break:
@@ -118,6 +140,15 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
         rejection_reason = "momentum_missing"
     elif trend == "bearish" and not bearish_momentum:
         rejection_reason = "momentum_missing"
+    elif trend == "bullish":
+        rejection_reason = "multi_layer_filter_failed"
+    elif trend == "bearish":
+        rejection_reason = "multi_layer_filter_failed"
+
+    filter_score = bullish_filter_score if trend == "bullish" else bearish_filter_score if trend == "bearish" else 0
+    failed_conditions = [
+        name for name, passed in (bullish_filter_conditions if trend == "bullish" else bearish_filter_conditions if trend == "bearish" else {}).items() if not passed
+    ]
 
     if signal == "NO_TRADE":
         reason.append(rejection_reason)
@@ -142,12 +173,14 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
             f"bearish_momentum={bearish_momentum}",
             f"range_expansion_ok={range_expansion_ok}",
             f"rejection_reason={rejection_reason}",
+            f"score={filter_score}",
+            f"failed_conditions={','.join(failed_conditions) if failed_conditions else 'none'}",
         ]
     )
 
     # UPDATED
     logger.info(
-        "[MCX_BREAKOUT_DEBUG] %s | prev_high=%.2f | prev_low=%.2f | last_close=%.2f | buy_diff=%.2f | sell_diff=%.2f | range_size=%.2f | rejection_reason=%s",
+        "[MCX_BREAKOUT_DEBUG] %s | prev_high=%.2f | prev_low=%.2f | last_close=%.2f | buy_diff=%.2f | sell_diff=%.2f | range_size=%.2f | rejection_reason=%s | score=%s | failed_conditions=%s",
         symbol,
         prev_high,
         prev_low,
@@ -156,6 +189,8 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
         sell_breakout_diff,
         range_size,
         rejection_reason,
+        filter_score,
+        ",".join(failed_conditions) if failed_conditions else "none",
     )
 
     return GeneratedSignal(

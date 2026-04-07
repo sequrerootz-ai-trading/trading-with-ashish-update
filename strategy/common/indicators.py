@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from config.symbol_config import get_symbol_config
 from data.candle_store import Candle
 
 
@@ -140,11 +141,12 @@ def calculate_volume_average(candles: list[Candle], period: int = 10) -> float |
     return round(sum(max(candle.volume, 0) for candle in window) / period, 2)
 
 
-def calculate_indicators(close_prices: list[float]) -> IndicatorSnapshot:
+def calculate_indicators(close_prices: list[float], symbol: str | None = None) -> IndicatorSnapshot:
+    symbol_config = get_symbol_config(symbol)
     return IndicatorSnapshot(
-        ema_9=calculate_ema(close_prices, period=9),
-        ema_21=calculate_ema(close_prices, period=21),
-        rsi=calculate_rsi(close_prices, period=14),
+        ema_9=calculate_ema(close_prices, period=int(symbol_config["ema_fast"])),
+        ema_21=calculate_ema(close_prices, period=int(symbol_config["ema_slow"])),
+        rsi=calculate_rsi(close_prices, period=int(symbol_config["rsi_period"])),
     )
 
 

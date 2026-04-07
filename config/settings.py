@@ -9,6 +9,10 @@ from dotenv import load_dotenv
 from config.config import get_market_type, get_symbol
 
 
+SYMBOL = "NIFTY"   # allowed: NIFTY, SENSEX, CRUDEOIL
+DEFAULT_EXECUTION_PROFILE = "STANDARD"
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = BASE_DIR / ".env"
 load_dotenv(ENV_FILE)
@@ -102,7 +106,7 @@ class Settings:
     access_token: str
     symbol: str
     market_type: str
-    execution_profile: str = "STANDARD"
+    execution_profile: str = DEFAULT_EXECUTION_PROFILE
     candle_interval_minutes: int = 3
     max_candles_in_memory: int = 200
     stale_tick_warning_seconds: int = 45
@@ -296,7 +300,7 @@ def get_settings() -> Settings:
     access_token = os.getenv("KITE_ACCESS_TOKEN", "").strip()
     symbol = get_symbol()
     market_type = get_market_type()
-    execution_profile = _get_execution_profile()
+    execution_profile = DEFAULT_EXECUTION_PROFILE
     profile_defaults = _merged_profile_defaults(symbol=symbol, market_type=market_type, execution_profile=execution_profile)
 
     if not api_key or not access_token:
@@ -379,8 +383,7 @@ def get_settings() -> Settings:
         available_symbols = SYMBOL_MAP.get(market_type, {})
         if symbol not in available_symbols:
             raise ValueError(
-                f"Invalid SYMBOL in .env for MARKET_TYPE={market_type}: {symbol}. "
-                f"Supported symbols: {sorted(available_symbols)}"
+                f"Invalid SYMBOL: {symbol}. Supported symbols: {sorted(available_symbols)}"
             )
         instrument = available_symbols[symbol]
 
@@ -424,15 +427,6 @@ def _normalize_equity_symbol(symbol: str) -> str:
         "BANK NIFTY": "BANKNIFTY",
     }
     return aliases.get(value, value)
-
-
-def _get_execution_profile() -> str:
-    raw_value = os.getenv("EXECUTION_PROFILE", "STANDARD").strip().upper()
-    if raw_value not in EXECUTION_PROFILE_DEFAULTS:
-        raise ValueError(
-            f"Unsupported EXECUTION_PROFILE={raw_value}. Supported profiles: {sorted(EXECUTION_PROFILE_DEFAULTS)}"
-        )
-    return raw_value
 
 
 def _get_env_float(name: str, default: float) -> float:

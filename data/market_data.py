@@ -193,9 +193,8 @@ class MarketDataService:
                 tick_gap = (now - self._last_tick_at).total_seconds()
                 if tick_gap >= self.settings.stale_tick_warning_seconds:
                     logger.warning(
-                        "# EXECUTION FIX stale market feed detected | no ticks for %.0fs | profile=%s",
+                        "# EXECUTION FIX stale market feed detected | no ticks for %.0fs",
                         tick_gap,
-                        self.settings.execution_profile,
                     )
             if self._last_closed_candle_at is not None:
                 candle_gap = (now - self._last_closed_candle_at).total_seconds()

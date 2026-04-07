@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, time as dt_time, timedelta
 
 from utils_console import CYAN, GREEN, RED, YELLOW, colorize
-from config import get_mode
+from config import get_market_type, get_mode
 from config.settings import Settings, get_settings
 from data.candle_manager import CandleManager
 from data.data_loader import HistoricalDataLoader, MINIMUM_STARTUP_CANDLES
@@ -99,8 +99,7 @@ def main() -> None:
     instrument = settings.instruments[0]
 
     logging.info("Runtime MODE=%s", mode)
-    logging.info("Runtime MARKET_TYPE=%s", market_type)
-    logging.info("Runtime EXECUTION_PROFILE=%s", settings.execution_profile)
+    logging.info("Runtime MARKET=%s", market_type)
     logging.info("[INFO] Processing SYMBOL: %s", symbol)
 
     market_data = MarketDataService(settings=settings)
@@ -810,7 +809,7 @@ def _reset_daily_state_if_needed(market_type: str) -> None:
 def _is_trade_window_open(symbol: str) -> bool:
     settings = _execution_settings()
     now = datetime.now().time()
-    market_type = os.getenv("MARKET_TYPE", "EQUITY").strip().upper()
+    market_type = get_market_type()
 
     if market_type == "MCX":
         morning_session = dt_time(9, 0) <= now <= dt_time(17, 0)
@@ -1365,7 +1364,7 @@ def _should_time_exit(active_trade: ActiveTrade, current_price: float) -> bool:
 
 def _market_close_time() -> datetime:
     now = datetime.now()
-    market_type = os.getenv("MARKET_TYPE", "EQUITY").strip().upper()
+    market_type = get_market_type()
     close_hour, close_minute = (23, 30) if market_type == "MCX" else (15, 30)
     return now.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
 

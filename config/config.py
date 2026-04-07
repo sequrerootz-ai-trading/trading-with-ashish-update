@@ -12,7 +12,12 @@ load_dotenv(ENV_FILE, override=False)
 
 MODE = os.getenv("MODE", "PAPER").strip().upper() or "PAPER"
 VALID_MODES = {"PAPER", "LIVE"}
-VALID_MARKET_TYPES = {"EQUITY", "MCX"}
+VALID_SYMBOLS = {"NIFTY", "SENSEX", "CRUDEOIL"}
+SYMBOL_TO_MARKET_TYPE = {
+    "NIFTY": "EQUITY",
+    "SENSEX": "EQUITY",
+    "CRUDEOIL": "MCX",
+}
 
 
 def get_mode() -> str:
@@ -23,16 +28,13 @@ def get_mode() -> str:
 
 
 def get_symbol() -> str:
-    symbol = os.getenv("SYMBOL", "").strip().upper()
-    if not symbol:
-        raise ValueError("Missing SYMBOL in .env")
+    symbol = os.getenv("SYMBOL", "NIFTY").strip().upper() or "NIFTY"
+    if symbol not in VALID_SYMBOLS:
+        raise ValueError(
+            f"Invalid SYMBOL: {symbol}. Expected one of {sorted(VALID_SYMBOLS)}"
+        )
     return symbol
 
 
 def get_market_type() -> str:
-    market_type = os.getenv("MARKET_TYPE", "EQUITY").strip().upper()
-    if market_type not in VALID_MARKET_TYPES:
-        raise ValueError(
-            f"Invalid MARKET_TYPE in .env: {market_type}. Expected one of {sorted(VALID_MARKET_TYPES)}"
-        )
-    return market_type
+    return SYMBOL_TO_MARKET_TYPE[get_symbol()]
