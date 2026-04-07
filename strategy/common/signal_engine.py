@@ -3,12 +3,7 @@ from __future__ import annotations
 from config import get_market_type
 from data.candle_store import Candle
 from data.database import TradingDatabase
-from strategy.nifty.signal_engine import (
-    generate_equity_signal_engine,
-    get_last_closed_candle,
-    store_market_data,
-    store_signal,
-)
+from strategy.nifty.signal_engine import generate_equity_signal_engine
 from strategy.mcx.signal_engine import generate_mcx_signal_engine
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 
@@ -24,6 +19,18 @@ def generate_signal(
     if normalized_market_type == "MCX":
         return generate_mcx_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
     return generate_equity_signal_engine(symbol, data, sentiment=sentiment, max_trades_per_day=max_trades_per_day)
+
+
+def get_last_closed_candle(symbol: str, database: TradingDatabase) -> Candle | None:
+    return database.get_last_closed_candle(symbol)
+
+
+def store_market_data(data: Candle, database: TradingDatabase) -> bool:
+    return database.store_market_data(data)
+
+
+def store_signal(signal: GeneratedSignal, database: TradingDatabase) -> None:
+    database.store_signal(signal.symbol, signal.timestamp or "", signal.signal, signal.reason)
 
 
 __all__ = [
