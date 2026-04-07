@@ -44,14 +44,24 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     close_position = float(analysis["close_position"])
     bullish_score = int(analysis["bullish_score"])
     bearish_score = int(analysis["bearish_score"])
-    momentum_ok = bool(analysis["momentum_ok"])
+    previous_candle = data.candles[-2]
+    current_range = max(float(current_candle.high) - float(current_candle.low), 0.0)
+    prev_range = max(float(previous_candle.high) - float(previous_candle.low), 0.0)
+    momentum_ok = current_range >= (prev_range * 1.05)
     volatility_ok = bool(analysis["volatility_ok"])
-    volume_ok = bool(analysis["volume_ok"])
+    average_volume = sum(max(float(candle.volume), 0.0) for candle in data.candles[-21:-1]) / max(len(data.candles[-21:-1]), 1)
+    current_volume = max(float(current_candle.volume), 0.0)
+    volume_ok = True if current_volume <= 0 else current_volume >= (average_volume * 0.85)
     rsi = float(analysis["rsi"]) if analysis["rsi"] is not None else 50.0
     break_strength = float(analysis.get("break_strength") or 0.0)
     break_type = str(analysis.get("break_type") or "none")
     break_reason = str(analysis.get("break_reason") or "na")
     live_price = float(analysis.get("live_price") or current_candle.close)
+    breakout_level = float(analysis["breakout_level"])
+    breakdown_level = float(analysis["breakdown_level"])
+    breakout_buffer = 2.0
+    bullish_break = live_price >= (breakout_level - breakout_buffer)
+    bearish_break = live_price <= (breakdown_level + breakout_buffer)
     bullish_break_distance = float(analysis.get("bullish_break_distance") or 0.0)
     bearish_break_distance = float(analysis.get("bearish_break_distance") or 0.0)
     price_reference = max(float(current_candle.close), 0.01)
@@ -117,6 +127,8 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             1.0,
         ),
     )
+    if break_strength > 0:
+        confidence = min(confidence + 0.05, 1.0)
 
     breakout_direction = break_type
     trend_aligned = (trend == "bullish" and breakout_direction == "upside") or (trend == "bearish" and breakout_direction == "downside")
@@ -125,10 +137,11 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         confidence = max(confidence - 0.1, 0.0)
 
     allow_trade = False
-    if breakout_direction in {"upside", "downside"} and break_strength >= 0.12 and confidence >= 0.6:
+    trend_strong = (trend == "bullish" and bullish_score >= 3) or (trend == "bearish" and bearish_score >= 3)
+    if bullish_break or bearish_break:
         allow_trade = True
         decision_reason = "strong_breakout_override"
-    elif breakout_direction in {"upside", "downside"} and trend_aligned and confidence >= 0.5:
+    elif trend_strong and momentum_ok:
         allow_trade = True
         decision_reason = "trend_aligned_breakout"
 
@@ -143,10 +156,29 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         option_entry_reason = decision_reason
 
     if allow_trade and break_strength == 0:
-        option_entry_reason = "weak_breakout_not_suitable_for_options"
-        signal = "NO_TRADE"
-        decision_reason = option_entry_reason
-        reason.append(decision_reason)
+        if (
+            trend == "bearish"
+            and momentum_ok
+            and volume_ok
+            and volatility_ok
+            and confidence >= 0.55
+        ):
+            signal = "BUY_PE"
+            reason.append("bearish_continuation_allowed")
+        elif (
+            trend == "bullish"
+            and momentum_ok
+            and volume_ok
+            and volatility_ok
+            and confidence >= 0.55
+        ):
+            signal = "BUY_CE"
+            reason.append("bullish_continuation_allowed")
+        else:
+            option_entry_reason = "weak_breakout_not_suitable_for_options"
+            signal = "NO_TRADE"
+            decision_reason = option_entry_reason
+            reason.append(decision_reason)
     elif allow_trade and break_strength < 0.18:
         if trend == "bullish" and momentum_ok:
             pass  # 🔥 allow trend continuation
@@ -198,8 +230,8 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             f"trend={trend}",
             f"timeframe={data.timeframe_minutes}m",
             f"live_price={live_price:.2f}",
-            f"breakout={float(analysis['breakout_level']):.2f}",
-            f"breakdown={float(analysis['breakdown_level']):.2f}",
+            f"breakout={breakout_level:.2f}",
+            f"breakdown={breakdown_level:.2f}",
             f"volume_ok={volume_ok}",
             f"momentum_ok={momentum_ok}",
             f"volatility_ok={volatility_ok}",
@@ -213,8 +245,8 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         ema_21=float(analysis["ema_21"]) if analysis["ema_21"] is not None else None,
         rsi=float(analysis["rsi"]) if analysis["rsi"] is not None else None,
         trend=trend,
-        breakout_price=float(analysis["breakout_level"]),
-        breakdown_price=float(analysis["breakdown_level"]),
+        breakout_price=breakout_level,
+        breakdown_price=breakdown_level,
         volume_ratio=float(analysis["volume_ratio"]) if analysis["volume_ratio"] is not None else None,
         market_condition=f"nifty_{trend}",
         rsi_state="normal",
@@ -239,8 +271,8 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         break_strength,
         break_type,
         live_price,
-        float(analysis["breakout_level"]),
-        float(analysis["breakdown_level"]),
+        breakout_level,
+        breakdown_level,
         break_reason,
     )
     logger.info(
@@ -371,18 +403,22 @@ def _detect_trend_continuation(data: SignalContext, analysis: dict[str, object])
     if data.last_candle is None or len(data.candles) < 5:
         return "NO_TRADE", 0.0, []
 
+    last_candle = data.last_candle
+    previous_candle = data.candles[-2]
     trend = str(analysis["trend"])
     close_position = float(analysis["close_position"])
-    momentum_ok = bool(analysis["momentum_ok"])
+    current_range = max(float(last_candle.high) - float(last_candle.low), 0.0)
+    previous_range = max(float(previous_candle.high) - float(previous_candle.low), 0.0)
+    momentum_ok = current_range >= (previous_range * 1.05)
     volatility_ok = bool(analysis["volatility_ok"])
-    volume_ok = bool(analysis["volume_ok"])
+    average_volume = sum(max(float(candle.volume), 0.0) for candle in data.candles[-21:-1]) / max(len(data.candles[-21:-1]), 1)
+    current_volume = max(float(last_candle.volume), 0.0)
+    volume_ok = True if current_volume <= 0 else current_volume >= (average_volume * 0.85)
     bullish_break = bool(analysis["bullish_break"])
     bearish_break = bool(analysis["bearish_break"])
     bullish_score = int(analysis["bullish_score"])
     bearish_score = int(analysis["bearish_score"])
 
-    last_candle = data.last_candle
-    previous_candle = data.candles[-2]
     current_close = float(last_candle.close)
     previous_close = float(previous_candle.close)
     current_open = float(last_candle.open)
@@ -402,31 +438,22 @@ def _detect_trend_continuation(data: SignalContext, analysis: dict[str, object])
     no_bullish_reversal = not bearish_break and current_close > recent_low * 1.0005
     no_bearish_reversal = not bullish_break and current_close < recent_high * 0.9995
 
-    if strong_trend_up and bullish_pullback and no_bullish_reversal and weak_follow_through and (momentum_ok or volume_ok):
+    strong_bullish_candle = close_position >= 0.85 and current_close > current_open and current_close > previous_close and volume_ok and no_bullish_reversal and not bullish_break
+    strong_bearish_candle = close_position <= 0.15 and current_close < current_open and current_close < previous_close and volume_ok and no_bearish_reversal and not bearish_break
+
+    if strong_trend_up and (strong_bullish_candle or momentum_ok):
         confidence = min(0.50 + (bullish_score * 0.06), 0.72)
         return "BUY_CE", confidence, ["ema_trend_up", "trend_continuation_entry", f"score={bullish_score}"]
 
-    if strong_trend_down and bearish_pullback and no_bearish_reversal and weak_follow_through and (momentum_ok or volume_ok):
+    if strong_trend_down and (strong_bearish_candle or momentum_ok):
         confidence = min(0.50 + (bearish_score * 0.06), 0.72)
         return "BUY_PE", confidence, ["ema_trend_down", "trend_continuation_entry", f"score={bearish_score}"]
 
     strong_bullish_push = (
-        strong_trend_up
-        and close_position >= 0.85
-        and current_close > current_open
-        and current_close > previous_close
-        and volume_ok
-        and no_bullish_reversal
-        and not bullish_break
+        strong_trend_up and strong_bullish_candle
     )
     strong_bearish_push = (
-        strong_trend_down
-        and close_position <= 0.15
-        and current_close < current_open
-        and current_close < previous_close
-        and volume_ok
-        and no_bearish_reversal
-        and not bearish_break
+        strong_trend_down and strong_bearish_candle
     )
 
     logger.info(
