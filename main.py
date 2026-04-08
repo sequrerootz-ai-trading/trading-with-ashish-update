@@ -908,6 +908,21 @@ def _format_confidence(confidence: float) -> str:
 
 
 def _humanize_reason(reason: str) -> str:
+    if "|" in reason and "signal=" in reason and "confidence=" in reason:
+        fields: dict[str, str] = {}
+        for segment in (segment.strip() for segment in reason.split("|") if segment.strip()):
+            if "=" not in segment:
+                continue
+            key, value = segment.split("=", 1)
+            fields[key.strip().lower()] = value.strip()
+
+        signal_value = fields.get("signal", "").replace("_", " ").strip().title()
+        confidence_value = fields.get("confidence", "").replace("_", " ").strip().title()
+        reason_value = fields.get("reason", "").replace("_", " ").strip()
+        pieces = [piece for piece in (signal_value, confidence_value, reason_value) if piece]
+        if pieces:
+            return " | ".join(pieces)
+
     parts = [part for part in reason.split() if part]
     readable: list[str] = []
 
@@ -991,22 +1006,37 @@ def _humanize_reason(reason: str) -> str:
 
 
 def _parse_reason_details(reason: str) -> dict[str, str]:
-    parts = [part for part in reason.split() if part]
+    raw_reason = reason.strip()
     fields: dict[str, str] = {}
-    for part in parts:
-        if "=" in part:
-            key, value = part.split("=", 1)
-            fields[key] = value
+
+    segments = [segment.strip() for segment in raw_reason.split("|") if segment.strip()]
+    if len(segments) > 1:
+        for segment in segments:
+            if "=" not in segment:
+                continue
+            key, value = segment.split("=", 1)
+            fields[key.strip().lower()] = value.strip()
+    else:
+        parts = [part for part in raw_reason.split() if part]
+        for part in parts:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                fields[key.strip().lower()] = value.strip()
 
     trend_value = fields.get("trend", "neutral").strip().lower()
     market_bias_map = {
         "bullish": "Bullish",
         "bearish": "Bearish",
         "neutral": "Neutral",
+        "sideways": "Neutral",
     }
     market_bias = market_bias_map.get(trend_value, trend_value.title())
     reason_tag = fields.get("reason", "")
+    normalized_reason = reason_tag.strip().lower().replace(" ", "_")
     entry_trigger_field = fields.get("entry_trigger", "").replace("_", " ")
+    entry_field_raw = fields.get("entry", "").strip()
+    entry_field = "" if entry_field_raw.lower() in {"", "none"} else entry_field_raw.replace("_", " ")
+
     structured_reason_map = {
         "sensex_sideways": ("Setup weak", "Sideways market blocked"),
         "sensex_weak_breakout": ("Weak breakout", "Weak breakout rejected"),
@@ -1019,51 +1049,69 @@ def _parse_reason_details(reason: str) -> dict[str, str]:
         "sensex_retest_not_ready": ("Waiting", "Retest setup was not ready"),
         "sensex_opposite_pressure": ("Setup weak", "Opposite candle pressure was too strong"),
         "sensex_flat_candle": ("Setup weak", "Candle body was too flat"),
+        "dead_market": ("Setup weak", "Dead market with low range"),
+        "sideways_market": ("Setup weak", "Sideways market blocked"),
+        "breakout_missing": ("Not confirmed", "Breakout or breakdown entry conditions were not met"),
+        "momentum_weak": ("Momentum weak", "Momentum confirmation was weak"),
+        "range_expansion_missing": ("Range weak", "Range expansion was missing"),
+        "low_score": ("Setup weak", "Setup score was too weak"),
+        "trend_misaligned": ("Trend blocked", "Trend and entry were misaligned"),
+        "weak_candle": ("Weak candle", "Candle body was too small for entry"),
+        "low_volatility": ("Low volatility", "Market range was too narrow"),
+        "weak_breakout": ("Weak breakout", "Breakout was too weak"),
+        "vwap_misaligned": ("VWAP mismatch", "Price was not aligned with VWAP"),
+        "direction_flip_weak": ("Direction flip", "Direction change lacked confidence"),
+        "option_not_confirmed": ("Option not confirmed", "Option flow was not confirmed"),
+        "premium_not_trending": ("Option not trending", "Premium trend was weak"),
+        "low_final_score": ("Setup weak", "Final signal score was too weak"),
+        "no_valid_option": ("Option unavailable", "No valid option contract was found"),
+        "strategy_exception": ("Strategy error", "Strategy engine failed"),
+        "invalid_signal": ("Invalid signal", "Strategy did not produce a valid trade setup"),
     }
 
-    if reason_tag in structured_reason_map:
-        entry_trigger, why = structured_reason_map[reason_tag]
+    if normalized_reason in structured_reason_map:
+        entry_trigger, why = structured_reason_map[normalized_reason]
         if entry_trigger_field:
             entry_trigger = entry_trigger_field
-    elif "commodity_filter_not_met" in parts:
+    elif "commodity_filter_not_met" in raw_reason:
         entry_trigger = "Not confirmed"
         why = "Breakout or breakdown entry conditions were not met"
-    elif "technical_filter_not_met" in parts:
+    elif "technical_filter_not_met" in raw_reason:
         entry_trigger = "Not confirmed"
         why = "Technical entry conditions were not met"
-    elif "indicator_warmup_pending" in parts:
+    elif "indicator_warmup_pending" in raw_reason:
         entry_trigger = "Waiting"
         why = "Indicators are still warming up"
-    elif "insufficient_closed_candles" in parts:
+    elif "insufficient_closed_candles" in raw_reason:
         entry_trigger = "Waiting"
         why = "Not enough closed candles yet"
-    elif "soft_filter_not_met" in parts:
+    elif "soft_filter_not_met" in raw_reason:
         entry_trigger = "Setup weak"
         why = "Breakout or continuation setup was not strong enough"
-    elif "weak_body" in parts:
+    elif "weak_body" in raw_reason:
         entry_trigger = "Weak candle body"
         why = "Candle body was too small for entry"
-    elif "low_range" in parts:
+    elif "low_range" in raw_reason:
         entry_trigger = "Low expansion"
         why = "Candle range was too small for entry"
-    elif any(part.startswith("low_conf<") for part in parts):
+    elif any(part.startswith("low_conf<") for part in raw_reason.split()):
         threshold = next(
-            (part.split("<", 1)[1] for part in parts if part.startswith("low_conf<")),
+            (part.split("<", 1)[1] for part in raw_reason.split() if part.startswith("low_conf<")),
             "",
         )
         entry_trigger = "Low confidence"
         why = f"Confidence did not reach threshold {threshold}".strip()
-    elif "call_rejected" in parts:
+    elif "call_rejected" in raw_reason:
         entry_trigger = "Bullish entry failed"
         why = "Bullish breakout or trend confirmation was not strong enough"
-    elif "put_rejected" in parts:
+    elif "put_rejected" in raw_reason:
         entry_trigger = "Bearish entry failed"
         why = "Bearish breakdown or trend confirmation was not strong enough"
-    elif "invalid_signal" in parts:
+    elif "invalid_signal" in raw_reason:
         entry_trigger = "No actionable setup"
         why = "Strategy did not produce a valid trade setup"
     else:
-        entry_trigger = entry_trigger_field or "Not confirmed"
+        entry_trigger = entry_trigger_field or entry_field or "Not confirmed"
         why = (
             reason_tag.replace("_", " ").title()
             if reason_tag
@@ -1072,19 +1120,23 @@ def _parse_reason_details(reason: str) -> dict[str, str]:
 
     levels_parts: list[str] = []
     for key, label in (
+        ("confidence", "Confidence"),
+        ("sl", "SL"),
+        ("target1", "Target1"),
+        ("target2", "Target2"),
         ("ema9", "EMA9"),
         ("ema21", "EMA21"),
         ("rsi", "RSI"),
         ("score", "Score"),
+        ("entry", "Entry"),
         ("entry_price", "EntryPrice"),
         ("target", "Target"),
         ("stop_loss", "StopLoss"),
         ("trend", "Trend"),
         ("breakout", "Breakout"),
-        ("entry", "Entry"),
     ):
         value = fields.get(key)
-        if value:
+        if value and value != "None":
             levels_parts.append(f"{label}={value}")
 
     failed_conditions_value = fields.get("failed_conditions")

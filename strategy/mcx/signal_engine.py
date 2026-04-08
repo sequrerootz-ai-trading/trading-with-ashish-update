@@ -9,6 +9,7 @@ from time import perf_counter
 from config.symbol_config import get_symbol_config
 from data.candle_store import Candle
 from data.database import TradingDatabase
+from strategy.common.indicators import calculate_indicators
 from strategy.common.signal_types import GeneratedSignal, SignalContext
 from strategy.mcx.option_helper import enrich_mcx_signal_with_option
 from strategy.mcx.strategy import generate_mcx_signal
@@ -22,12 +23,12 @@ _VWAP_CACHE: dict[tuple[str, str], float | None] = {}
 
 SCALPING_MAX_TRADES_PER_DAY = 28
 STANDARD_MAX_TRADES_PER_DAY = 24
-SCALPING_CONFIDENCE_THRESHOLD = 0.38
-FAST_CONFIDENCE_THRESHOLD = 0.42
-DEFAULT_CONFIDENCE_THRESHOLD = 0.48
-STRICT_REJECTION_BUFFER = 0.15
-MIN_DIRECTION_FLIP_CONFIDENCE = 0.45
-MIN_CANDLE_BODY_RATIO = 0.05
+SCALPING_CONFIDENCE_THRESHOLD = 0.33
+FAST_CONFIDENCE_THRESHOLD = 0.38
+DEFAULT_CONFIDENCE_THRESHOLD = 0.44
+STRICT_REJECTION_BUFFER = 0.10
+MIN_DIRECTION_FLIP_CONFIDENCE = 0.38
+MIN_CANDLE_BODY_RATIO = 0.035
 RELAXED_OPTION_MODE = True
 IV_DROP_TOLERANCE = 0.03
 
@@ -92,7 +93,18 @@ def _has_strong_candle(data: SignalContext) -> bool:
     if candle_range <= 0:
         return False
     body = abs(float(candle.close) - float(candle.open))
-    return body >= (candle_range * MIN_CANDLE_BODY_RATIO)
+    close_position = (float(candle.close) - float(candle.low)) / max(candle_range, 0.01)
+    prev_bodies = [
+        abs(float(item.close) - float(item.open)) for item in data.candles[-4:-1]
+    ]
+    avg_body = (sum(prev_bodies) / len(prev_bodies)) if prev_bodies else body
+    strong_body = body >= max(
+        candle_range * 0.10,
+        avg_body * 0.78,
+        MIN_CANDLE_BODY_RATIO * candle_range,
+    )
+    strong_close = close_position >= 0.62 or close_position <= 0.38
+    return strong_body or strong_close
 
 
 def _passes_direction_flip_control(
@@ -110,16 +122,49 @@ def _get_trend_bias(data: SignalContext) -> str:
     symbol_config = get_symbol_config(data.symbol)
     ema_fast_period = int(symbol_config["ema_fast"])
     ema_slow_period = int(symbol_config["ema_slow"])
-    closes = [c.close for c in data.candles[-max(ema_slow_period + 5, 15) :]]
+    closes = [float(candle.close) for candle in data.candles[-max(ema_slow_period + 4, 7) :]]
     if len(closes) < ema_slow_period:
         return "NEUTRAL"
 
-    ema_fast = sum(closes[-ema_fast_period:]) / ema_fast_period
-    ema_slow = sum(closes[-ema_slow_period:]) / ema_slow_period
+    indicators = calculate_indicators(closes, symbol=data.symbol)
+    ema_fast = indicators.ema_9
+    ema_slow = indicators.ema_21
+    if ema_fast is None or ema_slow is None:
+        return "NEUTRAL"
+
+    last_close = closes[-1]
+    recent_window = closes[-6:] if len(closes) >= 6 else closes
+    micro_window = closes[-4:] if len(closes) >= 4 else closes
+    recent_slope_pct = (
+        ((recent_window[-1] - recent_window[0]) / max(recent_window[0], 0.01)) * 100.0
+        if len(recent_window) >= 2
+        else 0.0
+    )
+    micro_slope_pct = (
+        ((micro_window[-1] - micro_window[0]) / max(micro_window[0], 0.01)) * 100.0
+        if len(micro_window) >= 2
+        else recent_slope_pct
+    )
+    ema_gap_pct = abs(float(ema_fast) - float(ema_slow)) / max(last_close, 0.01) * 100.0
+    min_gap = max(0.02, float(symbol_config["min_break_strength"]) * 0.12)
+
+    if ema_gap_pct < min_gap and abs(recent_slope_pct) <= 0.05 and abs(micro_slope_pct) <= 0.03:
+        return "NEUTRAL"
 
     if ema_fast > ema_slow:
+        if last_close >= ema_fast or recent_slope_pct >= -0.03 or micro_slope_pct >= -0.02:
+            return "BULLISH"
+    if ema_fast < ema_slow:
+        if last_close <= ema_fast or recent_slope_pct <= 0.03 or micro_slope_pct <= 0.02:
+            return "BEARISH"
+
+    if last_close > ema_fast and recent_slope_pct >= -0.02:
         return "BULLISH"
-    elif ema_fast < ema_slow:
+    if last_close < ema_fast and recent_slope_pct <= 0.02:
+        return "BEARISH"
+    if recent_slope_pct > 0.08 or micro_slope_pct > 0.05:
+        return "BULLISH"
+    if recent_slope_pct < -0.08 or micro_slope_pct < -0.05:
         return "BEARISH"
     return "NEUTRAL"
 
@@ -129,23 +174,48 @@ def _is_breakout_strong(data: SignalContext) -> bool:
         return True
 
     last = data.last_candle
-    prev_highs = [c.high for c in data.candles[-4:-1]]
-    prev_lows = [c.low for c in data.candles[-4:-1]]
+    if last is None:
+        return False
 
-    breakout_up = last.close >= max(prev_highs)
-    breakout_down = last.close <= min(prev_lows)
+    prev_window = data.candles[-4:-1] if len(data.candles) >= 4 else data.candles[:-1]
+    if not prev_window:
+        return True
 
-    return breakout_up or breakout_down
+    prev_high = max(c.high for c in prev_window)
+    prev_low = min(c.low for c in prev_window)
+
+    last_range = max(float(last.high) - float(last.low), 0.0)
+    avg_range = sum((c.high - c.low) for c in prev_window) / len(prev_window)
+    body = abs(float(last.close) - float(last.open))
+    close_position = (float(last.close) - float(last.low)) / max(last_range, 0.01)
+
+    breakout_up = (
+        last.close >= (prev_high * 0.999)
+        or last.close > prev_high
+        or (last.high > prev_high and last.close >= prev_high - max(last_range * 0.10, 0.25))
+    )
+    breakout_down = (
+        last.close <= (prev_low * 1.001)
+        or last.close < prev_low
+        or (last.low < prev_low and last.close <= prev_low + max(last_range * 0.10, 0.25))
+    )
+    body_support = body >= max(avg_range * 0.28, last_range * 0.16, 0.5)
+    momentum_close = close_position >= 0.62 or close_position <= 0.38
+
+    return breakout_up or breakout_down or body_support or momentum_close
 
 
 def _is_market_active(data: SignalContext) -> bool:
     if len(data.candles) < 8:
         return True
 
-    ranges = [(c.high - c.low) for c in data.candles[-8:]]
+    ranges = [float(c.high) - float(c.low) for c in data.candles[-8:]]
     avg_range = sum(ranges) / len(ranges)
+    current_range = ranges[-1]
+    min_active = max(0.85, (data.last_candle.close if data.last_candle else 0.0) * 0.00012)
+    dead_threshold = max(min_active, avg_range * 0.32)
 
-    return avg_range > 2.5
+    return avg_range >= min_active or current_range >= max(min_active * 0.7, dead_threshold * 0.85)
 
 
 # -----------------------------
@@ -584,20 +654,23 @@ def _option_confirmation_passed(
     signal_type = (
         "CALL" if signal.signal == "BUY" else "PUT" if signal.signal == "SELL" else None
     )
+    signal_context = signal.context or {}
+    filter_score = int(_safe_float(signal_context.get("filter_score") or signal_context.get("signal_score"), 0.0) or 0)
+    soft_allow = signal.confidence >= 0.60 or filter_score >= 65
 
-    if not premium_rising:
+    if not premium_rising and not soft_allow:
         logger.info("[REJECTED] %s premium falling", signal_type or "OPTION")
         return False, "option_not_confirmed"
-    if not premium_trending:
+    if not premium_trending and not soft_allow:
         logger.info("[REJECTED] weak premium trend")
         return False, "premium_not_trending"
-    if not iv_confirmed:
+    if not iv_confirmed and not soft_allow:
         logger.info("[REJECTED] IV dropping")
         return False, "option_not_confirmed"
-    if signal_type == "CALL" and vwap and not (spot_price > vwap and premium_rising):
+    if signal_type == "CALL" and vwap and not (spot_price > vwap) and not soft_allow:
         logger.info("[REJECTED] CALL premium not aligned with VWAP")
         return False, "option_not_confirmed"
-    if signal_type == "PUT" and vwap and not (spot_price < vwap and premium_rising):
+    if signal_type == "PUT" and vwap and not (spot_price < vwap) and not soft_allow:
         logger.info("[REJECTED] PUT premium not aligned with VWAP")
         return False, "option_not_confirmed"
 
@@ -742,30 +815,68 @@ def _apply_mcx_runtime_filters(
             float(getattr(signal, "confidence", 0.0) or 0.0),
         )
 
+    signal_context = signal.context or {}
     trend = _get_trend_bias(data)
+    filter_score = int(
+        _safe_float(
+            signal_context.get("filter_score") or signal_context.get("signal_score"),
+            0.0,
+        )
+        or 0
+    )
+    breakout_class = str(signal_context.get("breakout_class") or "").strip().lower()
+    entry_type = str(signal_context.get("entry_type") or "").strip().lower()
+    strong_signal = signal.confidence >= 0.65 or filter_score >= 65
+
     if trend != "NEUTRAL":
-        if signal.signal == "BUY" and trend != "BULLISH":
+        if signal.signal == "BUY" and trend == "BEARISH" and not (
+            strong_signal or breakout_class in {"micro", "early"} or entry_type == "pullback"
+        ):
             return GeneratedSignal(
                 symbol, now_ts, "NO_TRADE", "trend_misaligned", signal.confidence
             )
-        if signal.signal == "SELL" and trend != "BEARISH":
+        if signal.signal == "SELL" and trend == "BULLISH" and not (
+            strong_signal or breakout_class in {"micro", "early"} or entry_type == "pullback"
+        ):
             return GeneratedSignal(
                 symbol, now_ts, "NO_TRADE", "trend_misaligned", signal.confidence
             )
 
-    if not _has_strong_candle(data):
+    if (
+        not _has_strong_candle(data)
+        and signal.confidence < 0.50
+        and filter_score < 58
+        and breakout_class not in {"strong", "micro"}
+    ):
         return GeneratedSignal(symbol, now_ts, "NO_TRADE", "weak_candle", 0.0)
-    if not _is_market_active(data):
+    if not _is_market_active(data) and filter_score < 60 and signal.confidence < 0.60:
         return GeneratedSignal(symbol, now_ts, "NO_TRADE", "low_volatility", 0.0)
-    if not _is_breakout_strong(data):
+    if (
+        not _is_breakout_strong(data)
+        and signal.confidence < 0.52
+        and breakout_class not in {"micro", "early"}
+        and filter_score < 60
+    ):
         return GeneratedSignal(symbol, now_ts, "NO_TRADE", "weak_breakout", 0.0)
 
     signal, strength, vwap = _apply_vwap_strength(signal, spot_price, data)
-    if signal.signal == "BUY" and not (vwap and spot_price > vwap):
+    if (
+        signal.signal == "BUY"
+        and vwap
+        and not (spot_price > vwap)
+        and signal.confidence < 0.62
+        and filter_score < 60
+    ):
         return GeneratedSignal(
             symbol, now_ts, "NO_TRADE", "vwap_misaligned", signal.confidence
         )
-    if signal.signal == "SELL" and not (vwap and spot_price < vwap):
+    if (
+        signal.signal == "SELL"
+        and vwap
+        and not (spot_price < vwap)
+        and signal.confidence < 0.62
+        and filter_score < 60
+    ):
         return GeneratedSignal(
             symbol, now_ts, "NO_TRADE", "vwap_misaligned", signal.confidence
         )
@@ -779,13 +890,13 @@ def _apply_mcx_runtime_filters(
     passes, confidence_reason = _passes_confidence_filter(signal, data)
     if not passes:
         signal = replace(
-            signal, confidence=max(0.0, min(1.0, signal.confidence - 0.05))
+            signal, confidence=max(0.0, min(1.0, signal.confidence - 0.03))
         )
 
     option_ok, option_reason = _option_confirmation_passed(
         signal, option_state, spot_price, vwap
     )
-    if not option_ok and option_reason is not None:
+    if not option_ok and option_reason is not None and signal.confidence < 0.65 and filter_score < 65:
         return GeneratedSignal(
             symbol, now_ts, "NO_TRADE", option_reason, signal.confidence
         )

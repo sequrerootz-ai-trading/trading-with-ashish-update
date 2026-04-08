@@ -4,17 +4,21 @@ import logging
 from dataclasses import dataclass
 
 from config.symbol_config import get_symbol_config
-from strategy.common.indicators import calculate_indicators, detect_trend
-from strategy.common.signal_types import GeneratedSignal, SignalContext
+from strategy.common.indicators import calculate_atr, calculate_indicators, detect_trend
+from strategy.common.signal_types import GeneratedSignal, IndicatorDetails, SignalContext, SignalDetails
 
 logger = logging.getLogger(__name__)
 
-BREAKOUT_BUFFER_POINTS = 1.5
-MIN_RANGE_POINTS = 8.0
-MIN_BODY_RATIO = 0.18
-MIN_BREAKOUT_STRENGTH_PCT = 0.18
-MIN_TARGET_POINTS = 10.0
-MAX_TARGET_POINTS = 20.0
+BREAKOUT_BUFFER_POINTS = 1.2
+MIN_RANGE_POINTS = 4.0
+MIN_BODY_RATIO = 0.15
+MIN_BREAKOUT_STRENGTH_PCT = 0.10
+MIN_TARGET_POINTS = 6.0
+MAX_TARGET_POINTS = 18.0
+SCORING_THRESHOLD_NORMAL = 50
+SCORING_THRESHOLD_STRONG = 70
+CRUDEOIL_MICRO_BREAKOUT_PCT = 0.0010
+CRUDEOIL_DEAD_RANGE_POINTS = 1.75
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,13 @@ class MCXMarketBlock:
     rsi: float | None
     trend: str
     timeframe_minutes: int
+    average_body: float
+    range_expansion_ratio: float
+    close_position_ratio: float
+    ema_gap_pct: float
+    trend_slope_pct: float
+    atr: float
+    live_price: float
 
 
 @dataclass(frozen=True)
@@ -51,6 +62,11 @@ class MCXBreakoutBlock:
     range_expansion_ok: bool
     momentum_ok: bool
     candle_confirmation: bool
+    strong_breakout: bool
+    micro_breakout: bool
+    strong_close: bool
+    pullback_continuation: bool
+    breakout_class: str
 
 
 @dataclass(frozen=True)
@@ -79,37 +95,63 @@ def _build_mcx_market_block(symbol: str, data: SignalContext) -> MCXMarketBlock 
         return None
 
     close_prices = [float(candle.close) for candle in data.candles]
-    symbol_config = get_symbol_config(symbol)
     indicators = calculate_indicators(close_prices, symbol=symbol)
 
     current_candle = data.last_candle
-    recent_window = data.candles[-6:-1] if len(data.candles) >= 6 else data.candles[:-1]
-    if not recent_window:
-        recent_window = data.candles[-2:-1]
-    if not recent_window:
-        recent_window = [data.last_candle]
+    previous_candle = data.candles[-2]
+    swing_window = data.candles[-6:-1] if len(data.candles) >= 6 else data.candles[:-1]
+    if not swing_window:
+        swing_window = [previous_candle]
+    trend_window = data.candles[-7:] if len(data.candles) >= 7 else data.candles
+    body_window = data.candles[-4:-1] if len(data.candles) >= 4 else data.candles[:-1]
+    if not body_window:
+        body_window = [previous_candle]
 
-    prev_high = max(float(candle.high) for candle in recent_window)
-    prev_low = min(float(candle.low) for candle in recent_window)
-    recent_high = max(float(candle.high) for candle in recent_window)
-    recent_low = min(float(candle.low) for candle in recent_window)
-    current_range = max(float(current_candle.high) - float(current_candle.low), 0.0)
-    average_range = sum(
-        float(candle.high) - float(candle.low) for candle in recent_window
-    ) / len(recent_window)
-    body_size = abs(float(current_candle.close) - float(current_candle.open))
-    body_ratio = 0.0 if current_range <= 0 else (body_size / current_range)
+    current_open = float(current_candle.open)
+    current_high = float(current_candle.high)
+    current_low = float(current_candle.low)
+    current_close = float(current_candle.close)
+    current_range = max(current_high - current_low, 0.0)
+    prev_high = float(previous_candle.high)
+    prev_low = float(previous_candle.low)
+    recent_high = max(float(candle.high) for candle in swing_window)
+    recent_low = min(float(candle.low) for candle in swing_window)
+    average_range = _average(
+        [max(float(candle.high) - float(candle.low), 0.0) for candle in swing_window]
+    )
+    average_body = _average(
+        [abs(float(candle.close) - float(candle.open)) for candle in body_window]
+    )
+    body_size = abs(current_close - current_open)
+    body_ratio = body_size / max(current_range, 0.01)
+    close_position_ratio = _close_position_ratio(current_close, current_low, current_high)
+    range_expansion_ratio = current_range / max(average_range, 0.01) if average_range > 0 else 1.0
+    ema_fast = indicators.ema_9
+    ema_slow = indicators.ema_21
+    ema_gap_pct = (
+        abs(float(ema_fast) - float(ema_slow)) / max(current_close, 0.01) * 100.0
+        if ema_fast is not None and ema_slow is not None
+        else 0.0
+    )
+    trend_slope_pct = 0.0
+    if len(trend_window) >= 2:
+        first_close = float(trend_window[0].close)
+        last_close = float(trend_window[-1].close)
+        trend_slope_pct = ((last_close - first_close) / max(first_close, 0.01)) * 100.0
+
+    atr = calculate_atr(data.candles) or 0.0
+    live_price = _live_price(data, current_close)
 
     return MCXMarketBlock(
         symbol=symbol,
         timestamp=current_candle.end.isoformat(),
-        open=float(current_candle.open),
-        high=float(current_candle.high),
-        low=float(current_candle.low),
-        close=float(current_candle.close),
+        open=current_open,
+        high=current_high,
+        low=current_low,
+        close=current_close,
         prev_high=prev_high,
         prev_low=prev_low,
-        prev_close=float(data.candles[-2].close),
+        prev_close=float(previous_candle.close),
         recent_high=recent_high,
         recent_low=recent_low,
         average_range=average_range,
@@ -117,11 +159,18 @@ def _build_mcx_market_block(symbol: str, data: SignalContext) -> MCXMarketBlock 
         body_size=body_size,
         body_ratio=body_ratio,
         close_prices=close_prices,
-        ema_fast=indicators.ema_9,
-        ema_slow=indicators.ema_21,
+        ema_fast=ema_fast,
+        ema_slow=ema_slow,
         rsi=indicators.rsi,
-        trend=detect_trend(indicators.ema_9, indicators.ema_21),
+        trend=detect_trend(ema_fast, ema_slow),
         timeframe_minutes=data.timeframe_minutes,
+        average_body=average_body,
+        range_expansion_ratio=range_expansion_ratio,
+        close_position_ratio=close_position_ratio,
+        ema_gap_pct=ema_gap_pct,
+        trend_slope_pct=trend_slope_pct,
+        atr=atr,
+        live_price=live_price,
     )
 
 
@@ -135,15 +184,27 @@ def _detect_mcx_trend(block: MCXMarketBlock) -> str:
     if block.ema_fast is None or block.ema_slow is None:
         return "Sideways"
 
-    ema_gap_pct = (
-        abs(float(block.ema_fast) - float(block.ema_slow)) / max(block.close, 0.01)
-    ) * 100.0
-    min_break_strength = float(get_symbol_config(block.symbol)["min_break_strength"])
-    if ema_gap_pct < (min_break_strength * 0.5):
+    tuning = _mcx_tuning(block.symbol, block.timeframe_minutes)
+    dead_range = max(tuning["dead_range"], block.average_range * 0.55, block.atr * 0.25)
+    if (
+        block.current_range <= dead_range
+        and abs(block.trend_slope_pct) <= 0.03
+        and block.ema_gap_pct <= tuning["ema_gap_floor"]
+    ):
         return "Sideways"
+
     if block.ema_fast > block.ema_slow:
         return "Bullish"
     if block.ema_fast < block.ema_slow:
+        return "Bearish"
+
+    if block.close >= block.ema_fast and block.trend_slope_pct >= -tuning["ema_gap_floor"]:
+        return "Bullish"
+    if block.close <= block.ema_fast and block.trend_slope_pct <= tuning["ema_gap_floor"]:
+        return "Bearish"
+    if block.trend_slope_pct > 0.05:
+        return "Bullish"
+    if block.trend_slope_pct < -0.05:
         return "Bearish"
     return "Sideways"
 
@@ -155,36 +216,55 @@ def _detect_mcx_trend(block: MCXMarketBlock) -> str:
 # Outputs: breakout_type, breakout_strength
 # =========================
 def _detect_mcx_breakout(block: MCXMarketBlock) -> MCXBreakoutBlock:
-    breakout_up_points = max(block.close - block.prev_high, 0.0)
-    breakout_down_points = max(block.prev_low - block.close, 0.0)
-    breakout_buffer = BREAKOUT_BUFFER_POINTS
+    tuning = _mcx_tuning(block.symbol, block.timeframe_minutes)
+    price_ref = block.live_price if block.live_price > 0 else block.close
+    breakout_buffer = max(
+        BREAKOUT_BUFFER_POINTS,
+        block.average_range * 0.15,
+        block.atr * 0.10,
+        tuning["breakout_buffer_floor"],
+    )
+    micro_breakout_pct = tuning["micro_breakout_pct"]
+
     breakout_type = "NONE"
     breakout_points = 0.0
-
-    if block.close >= block.prev_high + breakout_buffer:
+    if (
+        price_ref >= block.prev_high * (1 + micro_breakout_pct)
+        or price_ref >= block.prev_high + breakout_buffer
+        or block.close > block.prev_high
+    ):
         breakout_type = "BULLISH"
-        breakout_points = breakout_up_points
-    elif block.close <= block.prev_low - breakout_buffer:
+        breakout_points = max(price_ref - block.prev_high, block.close - block.prev_high, 0.0)
+    elif (
+        price_ref <= block.prev_low * (1 - micro_breakout_pct)
+        or price_ref <= block.prev_low - breakout_buffer
+        or block.close < block.prev_low
+    ):
         breakout_type = "BEARISH"
-        breakout_points = breakout_down_points
-    elif block.close >= block.prev_high:
-        breakout_type = "BULLISH"
-        breakout_points = breakout_up_points
-    elif block.close <= block.prev_low:
-        breakout_type = "BEARISH"
-        breakout_points = breakout_down_points
+        breakout_points = max(block.prev_low - price_ref, block.prev_low - block.close, 0.0)
 
     breakout_strength = max((breakout_points / max(block.close, 0.01)) * 100.0, 0.0)
-    range_expansion_ok = (
-        block.current_range >= block.average_range
-        if block.average_range > 0
-        else block.current_range > 0
+    strong_breakout = breakout_points >= max(block.average_range * 0.35, block.atr * 0.12, breakout_buffer)
+    micro_breakout = (
+        breakout_type != "NONE"
+        and breakout_points > 0
+        and breakout_points < max(block.average_range * 0.30, block.atr * 0.12, breakout_buffer * 1.25)
     )
-    momentum_ok = _has_mcx_momentum(block, breakout_type)
-    candle_confirmation = (
-        block.close > block.prev_high
-        if breakout_type == "BULLISH"
-        else block.close < block.prev_low if breakout_type == "BEARISH" else False
+    strong_close = (
+        block.close_position_ratio >= 0.66 if breakout_type == "BULLISH" else block.close_position_ratio <= 0.34 if breakout_type == "BEARISH" else False
+    )
+    pullback_continuation = _is_pullback_continuation(block, breakout_type)
+    range_expansion_ok = block.range_expansion_ratio >= 0.90
+    momentum_ok = _has_mcx_momentum(block, breakout_type, strong_breakout, micro_breakout)
+    candle_confirmation = strong_close or block.body_ratio >= max(MIN_BODY_RATIO, 0.12)
+    breakout_class = (
+        "strong"
+        if strong_breakout
+        else "micro"
+        if micro_breakout
+        else "early"
+        if breakout_type != "NONE"
+        else "none"
     )
 
     return MCXBreakoutBlock(
@@ -195,6 +275,11 @@ def _detect_mcx_breakout(block: MCXMarketBlock) -> MCXBreakoutBlock:
         range_expansion_ok=range_expansion_ok,
         momentum_ok=momentum_ok,
         candle_confirmation=candle_confirmation,
+        strong_breakout=strong_breakout,
+        micro_breakout=micro_breakout,
+        strong_close=strong_close,
+        pullback_continuation=pullback_continuation,
+        breakout_class=breakout_class,
     )
 
 
@@ -205,20 +290,31 @@ def _detect_mcx_breakout(block: MCXMarketBlock) -> MCXBreakoutBlock:
 # Outputs: BUY / SELL / NO_TRADE
 # =========================
 def _decide_mcx_entry(
-    block: MCXMarketBlock, trend: str, breakout: MCXBreakoutBlock
+    block: MCXMarketBlock, trend: str, breakout: MCXBreakoutBlock, filter_score: int
 ) -> str:
-    if (
-        trend == "Bullish"
-        and breakout.breakout_type == "BULLISH"
-        and breakout.breakout_strength >= MIN_BREAKOUT_STRENGTH_PCT
-    ):
+    if filter_score < SCORING_THRESHOLD_NORMAL:
+        return "NO_TRADE"
+
+    bullish_bias = trend == "Bullish" or breakout.breakout_type == "BULLISH"
+    bearish_bias = trend == "Bearish" or breakout.breakout_type == "BEARISH"
+    momentum_override = breakout.momentum_ok or breakout.pullback_continuation
+
+    if breakout.breakout_type == "BULLISH" and (bullish_bias or momentum_override):
         return "BUY"
-    if (
-        trend == "Bearish"
-        and breakout.breakout_type == "BEARISH"
-        and breakout.breakout_strength >= MIN_BREAKOUT_STRENGTH_PCT
-    ):
+    if breakout.breakout_type == "BEARISH" and (bearish_bias or momentum_override):
         return "SELL"
+
+    if breakout.pullback_continuation and trend == "Bullish":
+        return "BUY"
+    if breakout.pullback_continuation and trend == "Bearish":
+        return "SELL"
+
+    if trend == "Sideways" and breakout.strong_breakout and breakout.momentum_ok:
+        return "BUY" if breakout.breakout_type == "BULLISH" else "SELL" if breakout.breakout_type == "BEARISH" else "NO_TRADE"
+
+    if breakout.micro_breakout and breakout.momentum_ok and filter_score >= SCORING_THRESHOLD_NORMAL:
+        return "BUY" if breakout.breakout_type == "BULLISH" else "SELL" if breakout.breakout_type == "BEARISH" else "NO_TRADE"
+
     return "NO_TRADE"
 
 
@@ -231,64 +327,127 @@ def _decide_mcx_entry(
 def _calculate_mcx_stoploss(
     block: MCXMarketBlock, entry_price: float, entry_signal: str
 ) -> float:
-    volatility_buffer = max(
-        block.average_range * 0.45, block.current_range * 0.3, 2.5
+    tuning = _mcx_tuning(block.symbol, block.timeframe_minutes)
+    range_basis = max(block.current_range, block.average_range, block.atr or 0.0)
+    risk_pct = min(
+        max((range_basis / max(entry_price, 0.01)) * 0.6, tuning["sl_min_pct"]),
+        tuning["sl_max_pct"],
     )
-    swing_buffer = max(volatility_buffer, 3.0)
+    swing_buffer = max(block.average_range * 0.18, block.current_range * 0.15, block.atr * 0.10, 0.75)
+
     if entry_signal == "BUY":
         swing_low = min(block.recent_low, block.low)
-        return round(min(entry_price - 2.0, swing_low - swing_buffer), 2)
+        swing_candidate = swing_low - swing_buffer
+        percent_candidate = entry_price * (1 - risk_pct)
+        stoploss = max(swing_candidate, percent_candidate)
+        return round(min(stoploss, entry_price - 0.10), 2)
+
     swing_high = max(block.recent_high, block.high)
-    return round(max(entry_price + 2.0, swing_high + swing_buffer), 2)
+    swing_candidate = swing_high + swing_buffer
+    percent_candidate = entry_price * (1 + risk_pct)
+    stoploss = min(swing_candidate, percent_candidate)
+    return round(max(stoploss, entry_price + 0.10), 2)
+
+
 # =========================
 # BLOCK 6: Target Logic (MCX)
-# Responsibility: Calculate realistic target (10-20 points minimum)
+# Responsibility: Calculate realistic target (T1 / T2)
 # Inputs: entry price
-# Outputs: target price
+# Outputs: target prices
 # =========================
-def _calculate_mcx_target(
+def _calculate_mcx_targets(
     block: MCXMarketBlock, entry_price: float, entry_signal: str, stoploss: float
-) -> float:
-    risk_points = abs(entry_price - stoploss)
-    projected_move = max(risk_points * 1.6, MIN_TARGET_POINTS)
-    projected_move = min(projected_move, MAX_TARGET_POINTS)
+) -> tuple[float, float]:
+    risk_points = max(
+        abs(entry_price - stoploss),
+        block.average_range * 0.55,
+        block.atr * 0.45,
+        MIN_TARGET_POINTS,
+    )
+    target1_move = max(risk_points, MIN_TARGET_POINTS)
+    target2_move = max(risk_points * 1.5, target1_move * 1.5)
+    target2_move = min(target2_move, MAX_TARGET_POINTS)
+    target1_move = min(target1_move, target2_move)
+
     if entry_signal == "BUY":
-        return round(entry_price + projected_move, 2)
-    return round(entry_price - projected_move, 2)
+        return round(entry_price + target1_move, 2), round(entry_price + target2_move, 2)
+    return round(entry_price - target1_move, 2), round(entry_price - target2_move, 2)
 
 
 # =========================
 # BLOCK 7: Trade Filters
-# Responsibility: Avoid weak breakout, no momentum, or fake moves
+# Responsibility: Score breakout, momentum, EMA alignment, pullback, range expansion
 # Inputs: breakout_strength, candle size, EMA gap
 # Outputs: filter_pass = True/False
 # =========================
 def _apply_mcx_filters(
     block: MCXMarketBlock, trend: str, breakout: MCXBreakoutBlock
 ) -> tuple[bool, list[str], int]:
-    symbol_config = get_symbol_config(block.symbol)
-    min_break_strength = float(symbol_config["min_break_strength"])
-    effective_break_strength = max(min_break_strength * 0.6, MIN_BREAKOUT_STRENGTH_PCT)
-    ema_gap_pct = (
-        abs(float(block.ema_fast or 0.0) - float(block.ema_slow or 0.0))
-        / max(block.close, 0.01)
-    ) * 100.0
-    sideways_market = trend == "Sideways" or ema_gap_pct < (effective_break_strength * 0.5)
+    tuning = _mcx_tuning(block.symbol, block.timeframe_minutes)
+    dead_market = (
+        block.current_range <= max(tuning["dead_range"], block.average_range * 0.45)
+        or block.current_range <= MIN_RANGE_POINTS * 0.35
+    )
 
-    filter_conditions = {
-        "range_ok": block.recent_high - block.recent_low >= MIN_RANGE_POINTS,
-        "body_ok": block.body_ratio >= MIN_BODY_RATIO,
-        "range_expansion_ok": breakout.range_expansion_ok,
-        "momentum_ok": breakout.momentum_ok,
-        "ema_gap_ok": not sideways_market,
-        "breakout_ok": breakout.breakout_strength >= effective_break_strength,
-    }
-    filter_score = sum(1 for passed in filter_conditions.values() if passed)
-    failed_conditions = [
-        name for name, passed in filter_conditions.items() if not passed
-    ]
-    filter_pass = filter_score >= 3
+    breakout_score = 0
+    if breakout.breakout_type != "NONE":
+        breakout_score = 20
+        if breakout.strong_breakout:
+            breakout_score += 10
+        elif breakout.micro_breakout:
+            breakout_score += 6
+        else:
+            breakout_score += 4
+        if breakout.candle_confirmation:
+            breakout_score += 4
+
+    momentum_score = 0
+    if breakout.momentum_ok:
+        momentum_score = 25
+    elif breakout.strong_close:
+        momentum_score = 15
+    elif block.body_ratio >= max(tuning["body_ratio_floor"], MIN_BODY_RATIO):
+        momentum_score = 8
+
+    ema_score = 0
+    if trend == "Bullish" and (block.ema_fast is not None and block.close >= block.ema_fast):
+        ema_score = 20
+    elif trend == "Bearish" and (block.ema_fast is not None and block.close <= block.ema_fast):
+        ema_score = 20
+    elif trend == "Sideways" and breakout.breakout_type != "NONE":
+        ema_score = 10 if block.ema_gap_pct <= tuning["ema_gap_floor"] * 1.5 else 5
+    elif block.ema_gap_pct <= tuning["ema_gap_floor"] * 1.2:
+        ema_score = 12
+
+    pullback_score = 15 if breakout.pullback_continuation else 0
+    range_score = 10 if breakout.range_expansion_ok else 0
+    structure_score = 5 if not dead_market and block.body_ratio >= tuning["body_ratio_floor"] else 0
+
+    filter_score = min(
+        breakout_score + momentum_score + ema_score + pullback_score + range_score + structure_score,
+        100,
+    )
+    if dead_market:
+        filter_score = min(filter_score, 20)
+
+    filter_pass = filter_score >= SCORING_THRESHOLD_NORMAL and not dead_market
+    failed_conditions: list[str] = []
+    if dead_market:
+        failed_conditions.append("dead_market")
+    if breakout_score == 0 and breakout.pullback_continuation is False:
+        failed_conditions.append("breakout_missing")
+    if momentum_score == 0:
+        failed_conditions.append("momentum_weak")
+    if ema_score == 0:
+        failed_conditions.append("ema_unaligned")
+    if pullback_score == 0 and trend in {"Bullish", "Bearish"}:
+        failed_conditions.append("pullback_missing")
+    if range_score == 0:
+        failed_conditions.append("range_expansion_missing")
+
     return filter_pass, failed_conditions, filter_score
+
+
 # =========================
 # BLOCK 8: Final Signal
 # Responsibility: Combine all conditions and generate final signal
@@ -304,30 +463,27 @@ def _build_mcx_final_signal(
     failed_conditions: list[str],
     filter_score: int,
 ) -> GeneratedSignal:
+    confidence_label = _confidence_label(filter_score if filter_pass else 0)
     if entry_signal == "NO_TRADE" or not filter_pass:
         rejection_reason = _resolve_rejection_reason(
-            block, trend, breakout, filter_pass, failed_conditions
+            block, trend, breakout, filter_pass, failed_conditions, filter_score
         )
-        reason_parts = [
-            rejection_reason,
-            f"ema_fast={_fmt(block.ema_fast)}",
-            f"ema_slow={_fmt(block.ema_slow)}",
-            f"trend={trend}",
-            f"timeframe={block.timeframe_minutes}m",
-            f"prev_high={block.prev_high:.2f}",
-            f"prev_low={block.prev_low:.2f}",
-            f"close={block.close:.2f}",
-            f"breakout_type={breakout.breakout_type}",
-            f"breakout_strength={breakout.breakout_strength:.2f}",
-            f"body_ratio={block.body_ratio:.2f}",
-            f"filter_score={filter_score}",
-            f"failed_conditions={','.join(failed_conditions) if failed_conditions else 'none'}",
-        ]
+        summary = _build_structured_summary(
+            signal="NO_TRADE",
+            confidence_label="WEAK",
+            entry_price=None,
+            stoploss=None,
+            target1=None,
+            target2=None,
+            reasons=rejection_reason,
+            block=block,
+            score=filter_score,
+        )
         logger.info(
             "[MCX_BREAKOUT_DEBUG] %s | trend=%s | breakout=%s | strength=%.2f | score=%s | failed=%s",
             block.symbol,
             trend,
-            breakout.breakout_type,
+            breakout.breakout_class,
             breakout.breakout_strength,
             filter_score,
             ",".join(failed_conditions) if failed_conditions else "none",
@@ -336,8 +492,25 @@ def _build_mcx_final_signal(
             symbol=block.symbol,
             timestamp=block.timestamp,
             signal="NO_TRADE",
-            reason=" ".join(reason_parts),
+            reason=summary,
             confidence=0.0,
+            details=SignalDetails(
+                action_label="No trade",
+                confidence_pct=0,
+                confidence_label="WEAK",
+                risk_label="Stand aside",
+                indicator_details=IndicatorDetails(
+                    ema_9=block.ema_fast,
+                    ema_21=block.ema_slow,
+                    rsi=block.rsi,
+                    trend=trend,
+                    trend_strength_pct=block.ema_gap_pct,
+                    breakout_price=block.prev_high,
+                    breakdown_price=block.prev_low,
+                    market_condition=f"mcx_{block.symbol.lower()}_{trend.lower()}",
+                ),
+                summary=summary,
+            ),
             context={
                 "open": block.open,
                 "high": block.high,
@@ -348,59 +521,36 @@ def _build_mcx_final_signal(
                 "trend": trend,
                 "breakout_type": breakout.breakout_type,
                 "breakout_strength": round(breakout.breakout_strength, 2),
+                "breakout_class": breakout.breakout_class,
                 "filter_score": filter_score,
                 "filter_pass": False,
+                "target1": None,
+                "target2": None,
+                "stoploss": None,
             },
         )
 
-    confidence = 0.58
-    reason: list[str] = []
-    if trend == "Bullish":
-        confidence += 0.08
-        reason.append("ema_trend_up")
-    elif trend == "Bearish":
-        confidence += 0.08
-        reason.append("ema_trend_down")
-
-    if breakout.breakout_strength >= 0.5:
-        confidence += 0.06
-    elif breakout.breakout_strength >= 0.3:
-        confidence += 0.03
-
-    if breakout.range_expansion_ok:
-        confidence += 0.04
-    if block.body_ratio >= 0.35:
-        confidence += 0.04
-    if breakout.candle_confirmation:
-        confidence += 0.03
-
-    confidence = min(confidence, 0.82)
-    entry_price = block.close
+    entry_price = block.live_price if block.live_price > 0 else block.close
     stoploss = _calculate_mcx_stoploss(block, entry_price, entry_signal)
-    target = _calculate_mcx_target(block, entry_price, entry_signal, stoploss)
-    reason.append("accepted")
-    reason.extend(
-        [
-            f"ema_fast={_fmt(block.ema_fast)}",
-            f"ema_slow={_fmt(block.ema_slow)}",
-            f"trend={trend}",
-            f"timeframe={block.timeframe_minutes}m",
-            f"prev_high={block.prev_high:.2f}",
-            f"prev_low={block.prev_low:.2f}",
-            f"close={block.close:.2f}",
-            f"breakout_type={breakout.breakout_type}",
-            f"breakout_strength={breakout.breakout_strength:.2f}",
-            f"body_ratio={block.body_ratio:.2f}",
-            f"stoploss={stoploss:.2f}",
-            f"target={target:.2f}",
-            f"filter_score={filter_score}",
-        ]
+    target1, target2 = _calculate_mcx_targets(block, entry_price, entry_signal, stoploss)
+    confidence = min(0.45 + (filter_score * 0.005), 0.92)
+    reasons = _accepted_reason_tags(block, trend, breakout)
+    summary = _build_structured_summary(
+        signal=entry_signal,
+        confidence_label=confidence_label,
+        entry_price=entry_price,
+        stoploss=stoploss,
+        target1=target1,
+        target2=target2,
+        reasons=reasons,
+        block=block,
+        score=filter_score,
     )
     logger.info(
         "[MCX_BREAKOUT_DEBUG] %s | trend=%s | breakout=%s | strength=%.2f | score=%s | accepted",
         block.symbol,
         trend,
-        breakout.breakout_type,
+        breakout.breakout_class,
         breakout.breakout_strength,
         filter_score,
     )
@@ -408,11 +558,28 @@ def _build_mcx_final_signal(
         symbol=block.symbol,
         timestamp=block.timestamp,
         signal=entry_signal,
-        reason=" ".join(reason),
+        reason=summary,
         confidence=confidence,
-        entry_price=entry_price,
-        target=target,
+        entry_price=round(entry_price, 2),
+        target=target2,
         stop_loss=stoploss,
+        details=SignalDetails(
+            action_label="Buy" if entry_signal == "BUY" else "Sell",
+            confidence_pct=int(round(confidence * 100)),
+            confidence_label=confidence_label,
+            risk_label="Scalp Tight SL",
+            indicator_details=IndicatorDetails(
+                ema_9=block.ema_fast,
+                ema_21=block.ema_slow,
+                rsi=block.rsi,
+                trend=trend,
+                trend_strength_pct=block.ema_gap_pct,
+                breakout_price=block.prev_high,
+                breakdown_price=block.prev_low,
+                market_condition=f"mcx_{block.symbol.lower()}_{entry_signal.lower()}",
+            ),
+            summary=summary,
+        ),
         context={
             "open": block.open,
             "high": block.high,
@@ -423,22 +590,43 @@ def _build_mcx_final_signal(
             "trend": trend,
             "breakout_type": breakout.breakout_type,
             "breakout_strength": round(breakout.breakout_strength, 2),
+            "breakout_class": breakout.breakout_class,
             "filter_score": filter_score,
             "filter_pass": True,
             "stoploss": stoploss,
-            "target": target,
+            "target1": target1,
+            "target2": target2,
+            "entry_type": "breakout" if breakout.breakout_type != "NONE" else "pullback" if breakout.pullback_continuation else "continuation",
+            "reason_tags": reasons,
+            "confidence_label": confidence_label,
+            "trail_after_target1": True,
+            "signal_score": filter_score,
         },
     )
 
 
+# =========================
+# Main Signal Entry Point
+# =========================
 def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
     block = _build_mcx_market_block(symbol, data)
     if block is None:
+        summary = _build_structured_summary(
+            signal="NO_TRADE",
+            confidence_label="WEAK",
+            entry_price=None,
+            stoploss=None,
+            target1=None,
+            target2=None,
+            reasons="insufficient_closed_candles",
+            block=None,
+            score=0,
+        )
         return GeneratedSignal(
             symbol=symbol,
             timestamp="",
             signal="NO_TRADE",
-            reason="insufficient_closed_candles",
+            reason=summary,
             confidence=0.0,
         )
 
@@ -447,7 +635,7 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
     filter_pass, failed_conditions, filter_score = _apply_mcx_filters(
         block, trend, breakout
     )
-    entry_signal = _decide_mcx_entry(block, trend, breakout)
+    entry_signal = _decide_mcx_entry(block, trend, breakout, filter_score)
     return _build_mcx_final_signal(
         block=block,
         trend=trend,
@@ -459,7 +647,15 @@ def generate_mcx_signal(symbol: str, data: SignalContext) -> GeneratedSignal:
     )
 
 
-def _has_mcx_momentum(block: MCXMarketBlock, breakout_type: str) -> bool:
+# =========================
+# Helper Functions
+# =========================
+def _has_mcx_momentum(
+    block: MCXMarketBlock,
+    breakout_type: str,
+    strong_breakout: bool = False,
+    micro_breakout: bool = False,
+) -> bool:
     closes = block.close_prices
     if len(closes) < 3:
         return True
@@ -467,16 +663,102 @@ def _has_mcx_momentum(block: MCXMarketBlock, breakout_type: str) -> bool:
     last_close = closes[-1]
     prev_close = closes[-2]
     prev_two = closes[-3]
-
+    strong_body = block.body_size >= max(block.average_body * 0.95, block.current_range * 0.22, 0.5)
+    strong_close = (
+        block.close_position_ratio >= 0.66
+        if breakout_type == "BULLISH"
+        else block.close_position_ratio <= 0.34
+        if breakout_type == "BEARISH"
+        else False
+    )
+    follow_through = False
     if breakout_type == "BULLISH":
-        return (
-            last_close >= prev_close >= prev_two or last_close > prev_close >= prev_two
-        )
+        follow_through = last_close >= prev_close or last_close >= prev_two
+    elif breakout_type == "BEARISH":
+        follow_through = last_close <= prev_close or last_close <= prev_two
+    else:
+        return strong_body and block.range_expansion_ratio >= 0.95
+
+    if strong_breakout:
+        return sum([strong_body, strong_close, follow_through]) >= 2
+    if micro_breakout:
+        return sum([strong_body, strong_close, follow_through, block.range_expansion_ratio >= 0.90]) >= 2
+    return sum([strong_body, strong_close, follow_through]) >= 2
+
+
+def _is_pullback_continuation(block: MCXMarketBlock, breakout_type: str) -> bool:
+    if block.ema_fast is None or block.ema_slow is None:
+        return False
+
+    pullback_buffer = max(block.atr * 0.10, block.average_range * 0.12, 0.75)
+    if breakout_type == "BULLISH":
+        touched = block.low <= min(block.ema_fast, block.ema_slow) + pullback_buffer
+        recovered = block.close >= block.ema_fast and block.close >= block.open
+        not_extended = block.close <= block.recent_high + max(block.average_range * 0.20, 1.0)
+        return touched and recovered and not_extended
     if breakout_type == "BEARISH":
-        return (
-            last_close <= prev_close <= prev_two or last_close < prev_close <= prev_two
-        )
-    return abs(last_close - prev_close) <= max(block.average_range * 0.15, 1.0)
+        touched = block.high >= max(block.ema_fast, block.ema_slow) - pullback_buffer
+        recovered = block.close <= block.ema_fast and block.close <= block.open
+        not_extended = block.close >= block.recent_low - max(block.average_range * 0.20, 1.0)
+        return touched and recovered and not_extended
+    return False
+
+
+def _accepted_reason_tags(block: MCXMarketBlock, trend: str, breakout: MCXBreakoutBlock) -> str:
+    tags: list[str] = []
+    if breakout.breakout_type != "NONE":
+        tags.append("breakout")
+        if breakout.strong_breakout:
+            tags.append("breakout strong")
+        elif breakout.micro_breakout:
+            tags.append("micro breakout")
+        else:
+            tags.append("early breakout")
+    if breakout.momentum_ok:
+        tags.append("momentum strong")
+    if trend != "Sideways":
+        tags.append("ema aligned")
+    if breakout.pullback_continuation:
+        tags.append("pullback continuation")
+    if breakout.range_expansion_ok:
+        tags.append("range expansion")
+    if not tags:
+        tags.append("momentum burst")
+    return ",".join(tags)
+
+
+def _build_structured_summary(
+    *,
+    signal: str,
+    confidence_label: str,
+    entry_price: float | None,
+    stoploss: float | None,
+    target1: float | None,
+    target2: float | None,
+    reasons: str,
+    block: MCXMarketBlock | None,
+    score: int,
+) -> str:
+    ema9 = _fmt(block.ema_fast if block else None)
+    ema21 = _fmt(block.ema_slow if block else None)
+    trend = (block.trend.lower() if block else "neutral")
+    prev_high = _fmt(block.prev_high if block else None)
+    prev_low = _fmt(block.prev_low if block else None)
+    last_close = _fmt(block.close if block else None)
+    return (
+        f"signal={signal} | confidence={confidence_label} | entry={_format_optional(entry_price)} | "
+        f"sl={_format_optional(stoploss)} | target1={_format_optional(target1)} | target2={_format_optional(target2)} | "
+        f"reason={reasons} | debug=EMA9={ema9} | EMA21={ema21} | trend={trend} | "
+        f"prev_high={prev_high} | prev_low={prev_low} | last_close={last_close} | score={score}"
+    )
+
+
+def _confidence_label(score: int) -> str:
+    if score >= SCORING_THRESHOLD_STRONG:
+        return "STRONG"
+    if score >= SCORING_THRESHOLD_NORMAL:
+        return "NORMAL"
+    return "WEAK"
 
 
 def _resolve_rejection_reason(
@@ -485,30 +767,78 @@ def _resolve_rejection_reason(
     breakout: MCXBreakoutBlock,
     filter_pass: bool,
     failed_conditions: list[str],
+    filter_score: int,
 ) -> str:
-    if block.recent_high - block.recent_low < MIN_RANGE_POINTS:
-        return "low_range"
-    if block.body_ratio < MIN_BODY_RATIO:
-        return "weak_breakout"
-    if trend == "Sideways":
-        return "sideways_market"
-    if breakout.breakout_type == "NONE":
-        return "breakout_missing"
-    if not breakout.range_expansion_ok:
-        return "range_expansion_missing"
-    if not breakout.momentum_ok:
-        return "momentum_missing"
+    if block.current_range <= max(CRUDEOIL_DEAD_RANGE_POINTS, MIN_RANGE_POINTS * 0.35):
+        return "dead market"
+    if trend == "Sideways" and breakout.breakout_type == "NONE" and not breakout.pullback_continuation:
+        return "sideways market"
+    if breakout.breakout_type == "NONE" and not breakout.pullback_continuation:
+        return "breakout missing"
+    if not breakout.momentum_ok and filter_score < SCORING_THRESHOLD_STRONG:
+        return "momentum weak"
+    if not breakout.range_expansion_ok and filter_score < SCORING_THRESHOLD_STRONG:
+        return "range expansion missing"
     if not filter_pass:
-        return "filter_rejected"
+        return "low score"
     if failed_conditions:
-        return failed_conditions[0]
+        return failed_conditions[0].replace("_", " ")
     return "rejected"
+
+
+def _mcx_tuning(symbol: str, timeframe_minutes: int) -> dict[str, float]:
+    is_crudeoil = symbol.strip().upper() == "CRUDEOIL"
+    if is_crudeoil:
+        micro_breakout_pct = 0.0008 if timeframe_minutes <= 1 else 0.0010 if timeframe_minutes <= 3 else 0.0012
+        return {
+            "range_floor": 4.0 if timeframe_minutes <= 3 else 5.0,
+            "body_ratio_floor": 0.15,
+            "breakout_strength_floor": 0.10,
+            "micro_breakout_pct": micro_breakout_pct,
+            "breakout_buffer_floor": 0.75,
+            "dead_range": CRUDEOIL_DEAD_RANGE_POINTS,
+            "ema_gap_floor": 0.05,
+            "sl_min_pct": 0.0020,
+            "sl_max_pct": 0.0040,
+        }
+    return {
+        "range_floor": 6.0,
+        "body_ratio_floor": 0.18,
+        "breakout_strength_floor": 0.12,
+        "micro_breakout_pct": 0.0015,
+        "breakout_buffer_floor": 1.0,
+        "dead_range": 2.5,
+        "ema_gap_floor": 0.08,
+        "sl_min_pct": 0.0025,
+        "sl_max_pct": 0.0050,
+    }
+
+
+def _close_position_ratio(close: float, low: float, high: float) -> float:
+    return (close - low) / max(high - low, 0.01)
+
+
+def _live_price(data: SignalContext, fallback: float) -> float:
+    for attr_name in ("live_price", "tick_price", "ltp", "last_price"):
+        value = getattr(data, attr_name, None)
+        try:
+            if value is not None and float(value) > 0:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return fallback
+
+
+def _average(values: list[float]) -> float:
+    return (sum(values) / len(values)) if values else 0.0
+
+
+def _format_optional(value: float | None) -> str:
+    return "None" if value is None else f"{value:.2f}"
 
 
 def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
-
-
 
