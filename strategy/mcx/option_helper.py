@@ -14,11 +14,11 @@ logger = logging.getLogger(__name__)
 STRIKE_STEP = 100
 OPTION_UNAVAILABLE_BOOST = -1
 OPTION_AVAILABLE_BOOST = 2
-DEFAULT_MCX_STOPLOSS_PCT = 0.08
-MIN_MCX_STOPLOSS_PCT = 0.05
-MAX_MCX_STOPLOSS_PCT = 0.11
-LOW_VOLATILITY_RISK_PCT = 0.065
-HIGH_VOLATILITY_RISK_PCT = 0.10
+DEFAULT_MCX_STOPLOSS_PCT = 0.09
+MIN_MCX_STOPLOSS_PCT = 0.06
+MAX_MCX_STOPLOSS_PCT = 0.14
+LOW_VOLATILITY_RISK_PCT = 0.075
+HIGH_VOLATILITY_RISK_PCT = 0.125
 TARGET_RR_MULTIPLIER = 2.0
 
 
@@ -158,9 +158,12 @@ def _build_mcx_option_enrichment(
     selected_option: dict[str, object],
 ) -> GeneratedSignal:
     entry_price = float(selected_option["ltp"])
-    range_pct = _coerce_float(
-        (getattr(generated_signal, "context", {}) or {}).get("current_range_pct"), 0.0
-    )
+    context = (getattr(generated_signal, "context", {}) or {})
+    range_pct = _coerce_float(context.get("current_range_pct"), 0.0)
+    if range_pct <= 0 and entry_price > 0:
+        current_high = _coerce_float(context.get("high"), entry_price) or entry_price
+        current_low = _coerce_float(context.get("low"), entry_price) or entry_price
+        range_pct = max((current_high - current_low) / max(entry_price, 0.01), 0.0)
     risk_pct = _resolve_mcx_risk_pct(
         entry_price, range_pct, generated_signal.confidence
     )
@@ -322,3 +325,8 @@ def _coerce_float(value: object, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+
+
+

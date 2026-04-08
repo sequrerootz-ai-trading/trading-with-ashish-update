@@ -938,6 +938,18 @@ def _humanize_reason(reason: str) -> str:
             readable.append("Indicators are still warming up")
         elif part == "insufficient_closed_candles":
             readable.append("Not enough closed candles yet")
+        elif part.startswith("signal="):
+            readable.append(f"Signal: {part.split('=', 1)[1].replace('_', ' ')}")
+        elif part.startswith("entry_trigger="):
+            readable.append(f"Entry trigger: {part.split('=', 1)[1].replace('_', ' ')}")
+        elif part.startswith("score="):
+            readable.append(f"Score: {part.split('=', 1)[1]}")
+        elif part.startswith("entry_price="):
+            readable.append(f"Entry price: {part.split('=', 1)[1]}")
+        elif part.startswith("target="):
+            readable.append(f"Target: {part.split('=', 1)[1]}")
+        elif part.startswith("stop_loss="):
+            readable.append(f"SL: {part.split('=', 1)[1]}")
         elif part.startswith("ema9="):
             readable.append(f"EMA 9: {part.split('=', 1)[1]}")
         elif part.startswith("ema21="):
@@ -947,9 +959,31 @@ def _humanize_reason(reason: str) -> str:
         elif part.startswith("trend="):
             readable.append(f"Trend: {part.split('=', 1)[1].title()}")
         elif part.startswith("breakout="):
-            readable.append(f"Breakout level: {part.split('=', 1)[1]}")
+            readable.append(f"Breakout: {part.split('=', 1)[1]}")
+        elif part.startswith("entry="):
+            readable.append(f"Entry: {part.split('=', 1)[1]}")
         elif part.startswith("breakdown="):
-            readable.append(f"Breakdown level: {part.split('=', 1)[1]}")
+            readable.append(f"Breakdown: {part.split('=', 1)[1]}")
+        elif part.startswith("reason="):
+            reason_value = part.split("=", 1)[1]
+            reason_map = {
+                "sensex_sideways": "Sideways market blocked",
+                "sensex_weak_breakout": "Weak breakout rejected",
+                "sensex_late_entry": "Late entry after an extended move",
+                "sensex_low_score": "Setup score was too weak",
+                "sensex_low_volume": "Volume confirmation was weak",
+                "sensex_low_momentum": "Momentum confirmation was weak",
+                "sensex_rsi_extreme": "RSI was at an extreme",
+                "sensex_pullback_not_ready": "Pullback setup was not ready",
+                "sensex_retest_not_ready": "Retest setup was not ready",
+                "sensex_opposite_pressure": "Opposite candle pressure was too strong",
+                "sensex_flat_candle": "Candle body was too flat",
+            }
+            readable.append(reason_map.get(reason_value, reason_value.replace("_", " ").title()))
+        elif part.startswith("failed_conditions="):
+            failed_value = part.split("=", 1)[1]
+            if failed_value != "none":
+                readable.append(f"Failed conditions: {failed_value.replace(',', ', ')}")
         else:
             readable.append(part.replace("_", " "))
 
@@ -958,23 +992,40 @@ def _humanize_reason(reason: str) -> str:
 
 def _parse_reason_details(reason: str) -> dict[str, str]:
     parts = [part for part in reason.split() if part]
+    fields: dict[str, str] = {}
+    for part in parts:
+        if "=" in part:
+            key, value = part.split("=", 1)
+            fields[key] = value
 
-    trend_value = next(
-        (
-            part.split("=", 1)[1].strip().lower()
-            for part in parts
-            if part.startswith("trend=")
-        ),
-        "neutral",
-    )
+    trend_value = fields.get("trend", "neutral").strip().lower()
     market_bias_map = {
         "bullish": "Bullish",
         "bearish": "Bearish",
         "neutral": "Neutral",
     }
     market_bias = market_bias_map.get(trend_value, trend_value.title())
+    reason_tag = fields.get("reason", "")
+    entry_trigger_field = fields.get("entry_trigger", "").replace("_", " ")
+    structured_reason_map = {
+        "sensex_sideways": ("Setup weak", "Sideways market blocked"),
+        "sensex_weak_breakout": ("Weak breakout", "Weak breakout rejected"),
+        "sensex_late_entry": ("Late entry", "Late entry after an extended move"),
+        "sensex_low_score": ("Setup weak", "Setup score was too weak"),
+        "sensex_low_volume": ("Waiting", "Volume confirmation was weak"),
+        "sensex_low_momentum": ("Waiting", "Momentum confirmation was weak"),
+        "sensex_rsi_extreme": ("Waiting", "RSI was at an extreme"),
+        "sensex_pullback_not_ready": ("Waiting", "Pullback setup was not ready"),
+        "sensex_retest_not_ready": ("Waiting", "Retest setup was not ready"),
+        "sensex_opposite_pressure": ("Setup weak", "Opposite candle pressure was too strong"),
+        "sensex_flat_candle": ("Setup weak", "Candle body was too flat"),
+    }
 
-    if "commodity_filter_not_met" in parts:
+    if reason_tag in structured_reason_map:
+        entry_trigger, why = structured_reason_map[reason_tag]
+        if entry_trigger_field:
+            entry_trigger = entry_trigger_field
+    elif "commodity_filter_not_met" in parts:
         entry_trigger = "Not confirmed"
         why = "Breakout or breakdown entry conditions were not met"
     elif "technical_filter_not_met" in parts:
@@ -1012,21 +1063,35 @@ def _parse_reason_details(reason: str) -> dict[str, str]:
         entry_trigger = "No actionable setup"
         why = "Strategy did not produce a valid trade setup"
     else:
-        entry_trigger = "Not confirmed"
-        why = _humanize_reason(reason)
+        entry_trigger = entry_trigger_field or "Not confirmed"
+        why = (
+            reason_tag.replace("_", " ").title()
+            if reason_tag
+            else _humanize_reason(reason)
+        )
 
     levels_parts: list[str] = []
-    for part in parts:
-        if part.startswith("ema9="):
-            levels_parts.append(f"EMA9={part.split('=', 1)[1]}")
-        elif part.startswith("ema21="):
-            levels_parts.append(f"EMA21={part.split('=', 1)[1]}")
-        elif part.startswith("rsi="):
-            levels_parts.append(f"RSI={part.split('=', 1)[1]}")
-        elif part.startswith("breakout="):
-            levels_parts.append(f"Breakout={part.split('=', 1)[1]}")
-        elif part.startswith("breakdown="):
-            levels_parts.append(f"Breakdown={part.split('=', 1)[1]}")
+    for key, label in (
+        ("ema9", "EMA9"),
+        ("ema21", "EMA21"),
+        ("rsi", "RSI"),
+        ("score", "Score"),
+        ("entry_price", "EntryPrice"),
+        ("target", "Target"),
+        ("stop_loss", "StopLoss"),
+        ("trend", "Trend"),
+        ("breakout", "Breakout"),
+        ("entry", "Entry"),
+    ):
+        value = fields.get(key)
+        if value:
+            levels_parts.append(f"{label}={value}")
+
+    failed_conditions_value = fields.get("failed_conditions")
+    if failed_conditions_value and failed_conditions_value != "none":
+        levels_parts.append(
+            f"Failed={failed_conditions_value.replace(',', ', ')}"
+        )
 
     levels = f" | Levels: {', '.join(levels_parts)}" if levels_parts else ""
     return {

@@ -9,10 +9,10 @@ from strategy.common.signal_types import GeneratedSignal, SignalContext
 
 logger = logging.getLogger(__name__)
 
-BREAKOUT_BUFFER_POINTS = 2.5
-MIN_RANGE_POINTS = 10.0
-MIN_BODY_RATIO = 0.22
-MIN_BREAKOUT_STRENGTH_PCT = 0.25
+BREAKOUT_BUFFER_POINTS = 1.5
+MIN_RANGE_POINTS = 8.0
+MIN_BODY_RATIO = 0.18
+MIN_BREAKOUT_STRENGTH_PCT = 0.18
 MIN_TARGET_POINTS = 10.0
 MAX_TARGET_POINTS = 20.0
 
@@ -231,15 +231,15 @@ def _decide_mcx_entry(
 def _calculate_mcx_stoploss(
     block: MCXMarketBlock, entry_price: float, entry_signal: str
 ) -> float:
-    volatility_buffer = max(block.average_range * 0.35, block.current_range * 0.25, 1.5)
-    swing_buffer = max(volatility_buffer, 2.0)
+    volatility_buffer = max(
+        block.average_range * 0.45, block.current_range * 0.3, 2.5
+    )
+    swing_buffer = max(volatility_buffer, 3.0)
     if entry_signal == "BUY":
         swing_low = min(block.recent_low, block.low)
-        return round(max(entry_price - 2.0, swing_low - swing_buffer), 2)
+        return round(min(entry_price - 2.0, swing_low - swing_buffer), 2)
     swing_high = max(block.recent_high, block.high)
-    return round(min(entry_price + 2.0, swing_high + swing_buffer), 2)
-
-
+    return round(max(entry_price + 2.0, swing_high + swing_buffer), 2)
 # =========================
 # BLOCK 6: Target Logic (MCX)
 # Responsibility: Calculate realistic target (10-20 points minimum)
@@ -268,11 +268,12 @@ def _apply_mcx_filters(
 ) -> tuple[bool, list[str], int]:
     symbol_config = get_symbol_config(block.symbol)
     min_break_strength = float(symbol_config["min_break_strength"])
+    effective_break_strength = max(min_break_strength * 0.6, MIN_BREAKOUT_STRENGTH_PCT)
     ema_gap_pct = (
         abs(float(block.ema_fast or 0.0) - float(block.ema_slow or 0.0))
         / max(block.close, 0.01)
     ) * 100.0
-    sideways_market = trend == "Sideways" or ema_gap_pct < (min_break_strength * 0.5)
+    sideways_market = trend == "Sideways" or ema_gap_pct < (effective_break_strength * 0.5)
 
     filter_conditions = {
         "range_ok": block.recent_high - block.recent_low >= MIN_RANGE_POINTS,
@@ -280,16 +281,14 @@ def _apply_mcx_filters(
         "range_expansion_ok": breakout.range_expansion_ok,
         "momentum_ok": breakout.momentum_ok,
         "ema_gap_ok": not sideways_market,
-        "breakout_ok": breakout.breakout_strength >= min_break_strength,
+        "breakout_ok": breakout.breakout_strength >= effective_break_strength,
     }
     filter_score = sum(1 for passed in filter_conditions.values() if passed)
     failed_conditions = [
         name for name, passed in filter_conditions.items() if not passed
     ]
-    filter_pass = filter_score >= 4
+    filter_pass = filter_score >= 3
     return filter_pass, failed_conditions, filter_score
-
-
 # =========================
 # BLOCK 8: Final Signal
 # Responsibility: Combine all conditions and generate final signal
@@ -510,3 +509,6 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
+
+
+

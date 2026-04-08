@@ -8,7 +8,7 @@ SYMBOL_CONFIG = {
         "ema_fast": 9,
         "ema_slow": 21,
         "rsi_period": 14,
-        "min_break_strength": 0.25,
+        "min_break_strength": 0.22,
     },
     "SENSEX": {
         "market": "EQUITY",

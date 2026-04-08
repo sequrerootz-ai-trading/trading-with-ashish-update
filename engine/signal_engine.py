@@ -9,23 +9,23 @@ MIN_REQUIRED_CANDLES = 8
 FAST_TIMEFRAME_MINUTES = 3
 BULLISH_BREAKOUT_BUFFER = 0.999
 BEARISH_BREAKDOWN_BUFFER = 1.001
-MOMENTUM_FACTOR = 0.8
-MIN_VOLUME_RATIO = 0.9
-MIN_VOLATILITY_FACTOR = 0.7
-FAST_BUY_CLOSE_POSITION = 0.62
-FAST_SELL_CLOSE_POSITION = 0.38
+MOMENTUM_FACTOR = 0.75
+MIN_VOLUME_RATIO = 0.85
+MIN_VOLATILITY_FACTOR = 0.62
+FAST_BUY_CLOSE_POSITION = 0.58
+FAST_SELL_CLOSE_POSITION = 0.42
 SLOW_BUY_CLOSE_POSITION = 0.55
 SLOW_SELL_CLOSE_POSITION = 0.45
-MIN_SCORE_TO_TRIGGER = 2
-SIDEWAYS_TREND_STRENGTH_PCT = 0.0003
-TARGET_RISK_MULTIPLIER = 1.2
-STOP_RISK_MULTIPLIER = 0.8
-MIN_BREAK_BUFFER_PCT = 0.00025
+MIN_SCORE_TO_TRIGGER = 1
+SIDEWAYS_TREND_STRENGTH_PCT = 0.00022
+TARGET_RISK_MULTIPLIER = 1.1
+STOP_RISK_MULTIPLIER = 0.9
+MIN_BREAK_BUFFER_PCT = 0.0002
 MAX_NORMALIZED_BREAK_STRENGTH = 1.0
-MIN_LIVE_BREAK_MOVE_PCT = 0.0005
-EARLY_BREAK_PROXIMITY = 0.9995
-EARLY_BREAK_STRENGTH = 0.25
-EARLY_BREAK_TREND_STRENGTH_PCT = 0.00045
+MIN_LIVE_BREAK_MOVE_PCT = 0.0004
+EARLY_BREAK_PROXIMITY = 0.9992
+EARLY_BREAK_STRENGTH = 0.28
+EARLY_BREAK_TREND_STRENGTH_PCT = 0.00035
 
 
 def evaluate_nifty_price_action(data: SignalContext) -> dict[str, object]:
@@ -195,7 +195,7 @@ def calculate_break_strength(
 ) -> dict[str, object]:
     live_price = max(float(live_price), 0.01)
     avg_range = (sum(recent_ranges) / len(recent_ranges)) if recent_ranges else 0.0
-    min_move = max(live_price * MIN_LIVE_BREAK_MOVE_PCT, avg_range * 0.12, 1.0)
+    min_move = max(live_price * MIN_LIVE_BREAK_MOVE_PCT, avg_range * 0.10, 0.8)
 
     bullish_cross = live_price > breakout_level or current_high > breakout_level
     bearish_cross = live_price < breakdown_level or current_low < breakdown_level
@@ -207,11 +207,11 @@ def calculate_break_strength(
     )
 
     bullish_sustain = (
-        live_price >= breakout_level + (min_move * 0.5)
+        live_price >= breakout_level + (min_move * 0.4)
         or current_close >= breakout_level
     )
     bearish_sustain = (
-        live_price <= breakdown_level - (min_move * 0.5)
+        live_price <= breakdown_level - (min_move * 0.4)
         or current_close <= breakdown_level
     )
 
@@ -279,7 +279,7 @@ def calculate_break_strength(
         if break_type == "upside"
         else downside_strength if break_type == "downside" else 0.0
     )
-    confirmed_break = break_reason.startswith("live_break")
+    confirmed_break = break_reason.startswith("live_break") or break_reason == "early_break_pressure"
     bullish_break = break_type == "upside" and break_strength > 0.0 and confirmed_break
     bearish_break = (
         break_type == "downside" and break_strength > 0.0 and confirmed_break

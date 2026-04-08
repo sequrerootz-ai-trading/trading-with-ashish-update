@@ -19,8 +19,8 @@ from utils.calculations import premium_trade_levels
 
 logger = logging.getLogger(__name__)
 
-FAST_BUY_BREAK_CLOSE_POSITION = 0.55  # was 0.58
-FAST_SELL_BREAK_CLOSE_POSITION = 0.45  # was 0.40
+FAST_BUY_BREAK_CLOSE_POSITION = 0.53
+FAST_SELL_BREAK_CLOSE_POSITION = 0.47
 
 DEEP_OVERSOLD_RSI = 15.0  # was 18.0
 OVERSOLD_RSI = 20.0  # was 22.0
@@ -76,7 +76,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     live_price = float(analysis.get("live_price") or current_candle.close)
     breakout_level = float(analysis["breakout_level"])
     breakdown_level = float(analysis["breakdown_level"])
-    breakout_buffer = 2.0
+    breakout_buffer = 1.0
     bullish_break = live_price >= (breakout_level - breakout_buffer)
     bearish_break = live_price <= (breakdown_level + breakout_buffer)
     bullish_break_distance = float(analysis.get("bullish_break_distance") or 0.0)
@@ -86,11 +86,11 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     bullish_close_threshold = FAST_BUY_BREAK_CLOSE_POSITION if fast_timeframe else 0.55
     bearish_close_threshold = FAST_SELL_BREAK_CLOSE_POSITION if fast_timeframe else 0.45
     strong_bullish_break = (
-        bullish_break_distance >= max(price_reference * 0.00025, 3.0)
+        bullish_break_distance >= max(price_reference * 0.0002, 2.0)
         or break_strength >= 0.0003
     )
     strong_bearish_break = (
-        bearish_break_distance >= max(price_reference * 0.00025, 3.0)
+        bearish_break_distance >= max(price_reference * 0.0002, 2.0)
         or break_strength >= 0.0003
     )
     bearish_rsi_extended = rsi <= OVERSOLD_RSI
@@ -107,7 +107,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         trend == "bullish"
         and bullish_break
         and close_position >= bullish_close_threshold
-        and bullish_score >= 3
+        and bullish_score >= 1
         and (
             strong_bullish_break
             or not bullish_rsi_exhausted
@@ -121,7 +121,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         trend == "bearish"
         and bearish_break
         and close_position <= bearish_close_threshold
-        and bearish_score >= 3
+        and bearish_score >= 1
         and (strong_bearish_break or not bearish_rsi_exhausted)
     ):
         if bearish_rsi_extended:
@@ -152,19 +152,21 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         if ema9 > 0 and ema21 > 0
         else 0.0
     )
-    sideways_market = ema_diff_pct < (min_break_strength * 0.5)
+    sideways_market = ema_diff_pct < (min_break_strength * 0.4)
+    break_strength_pct = break_strength
+    strength_floor = min_break_strength
     bullish_filter_conditions = {
-        "momentum": rsi > 55.0,
-        "break_strength": break_strength >= min_break_strength,
-        "candle_confirmation": current_close > float(previous_candle.high),
-        "trend_alignment": ema9 > ema21,
+        "momentum": rsi > 53.0,
+        "break_strength": break_strength_pct >= strength_floor,
+        "candle_confirmation": current_close >= float(previous_candle.high) * 0.9995,
+        "trend_alignment": ema9 >= ema21 * 0.9995,
         "sideways_filter": not sideways_market,
     }
     bearish_filter_conditions = {
-        "momentum": rsi < 45.0,
-        "break_strength": break_strength >= min_break_strength,
-        "candle_confirmation": current_close < float(previous_candle.low),
-        "trend_alignment": ema9 < ema21,
+        "momentum": rsi < 47.0,
+        "break_strength": break_strength_pct >= strength_floor,
+        "candle_confirmation": current_close <= float(previous_candle.low) * 1.0005,
+        "trend_alignment": ema9 <= ema21 * 1.0005,
         "sideways_filter": not sideways_market,
     }
     bullish_filter_score = sum(
@@ -186,7 +188,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         confidence_close = 0.05
     else:
         confidence_close = 0.0
-    confidence_rsi = 0.05 if 50.0 < rsi < 70.0 else 0.0
+    confidence_rsi = 0.05 if 45.0 < rsi < 75.0 else 0.0
     confidence = max(
         0.0,
         min(
@@ -212,8 +214,8 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         confidence = max(confidence - 0.1, 0.0)
 
     allow_trade = False
-    trend_strong = (trend == "bullish" and bullish_score >= 3) or (
-        trend == "bearish" and bearish_score >= 3
+    trend_strong = (trend == "bullish" and bullish_score >= 2) or (
+        trend == "bearish" and bearish_score >= 2
     )
     if bullish_break or bearish_break:
         allow_trade = True
@@ -235,17 +237,19 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
     failed_conditions = [
         name for name, passed in filter_conditions.items() if not passed
     ]
-    if allow_trade and filter_score < 4:
+    option_entry_reason = decision_reason
+    if allow_trade and filter_score < 1:
         allow_trade = False
         decision_reason = "multi_layer_filter_failed"
-
-    option_entry_reason = decision_reason
+    elif allow_trade and filter_score < 2:
+        confidence = max(confidence - 0.08, 0.0)
+        option_entry_reason = "soft_score_penalty_applied"
     soft_setup_present = any("soft" in item for item in reason)
     if allow_trade and soft_setup_present:
         confidence = max(confidence - 0.10, 0.0)
         option_entry_reason = "soft_setup_penalty_applied"
 
-    if allow_trade and break_strength >= 0.23 and confidence >= 0.75:
+    if allow_trade and break_strength_pct >= max(0.18, strength_floor) and confidence >= 0.68:
         decision_reason = (
             "strong_breakout_override_soft_adjusted"
             if soft_setup_present
@@ -259,7 +263,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             and momentum_ok
             and volume_ok
             and volatility_ok
-            and confidence >= 0.55
+            and confidence >= 0.45
         ):
             signal = "BUY_PE"
             reason.append("bearish_continuation_allowed")
@@ -268,7 +272,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             and momentum_ok
             and volume_ok
             and volatility_ok
-            and confidence >= 0.55
+            and confidence >= 0.45
         ):
             signal = "BUY_CE"
             reason.append("bullish_continuation_allowed")
@@ -277,7 +281,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             signal = "NO_TRADE"
             decision_reason = option_entry_reason
             reason.append(decision_reason)
-    elif allow_trade and break_strength < 0.18:
+    elif allow_trade and break_strength_pct < 0.10:
         if trend == "bullish" and momentum_ok:
             pass  # 🔥 allow trend continuation
         else:
@@ -285,7 +289,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
             signal = "NO_TRADE"
             decision_reason = option_entry_reason
             reason.append(decision_reason)
-    elif allow_trade and confidence < 0.6:
+    elif allow_trade and confidence < 0.45:
         option_entry_reason = "low_confidence_for_options"
         signal = "NO_TRADE"
         decision_reason = option_entry_reason
@@ -303,7 +307,7 @@ def generate_nifty_options_signal(data: SignalContext) -> GeneratedSignal:
         signal = "NO_TRADE"
         decision_reason = option_entry_reason
         reason.append(decision_reason)
-    elif allow_trade and break_strength < min_break_strength and momentum_ok:
+    elif allow_trade and break_strength_pct < (strength_floor * 0.8) and momentum_ok:
         option_entry_reason = "no_price_expansion"
         signal = "NO_TRADE"
         decision_reason = option_entry_reason
@@ -491,7 +495,7 @@ def enrich_nifty_signal_with_premium(
         return signal
 
     trade_levels = premium_trade_levels(
-        premium.last_price, target_pct=0.20, stop_loss_pct=0.15
+        premium.last_price, target_pct=0.16, stop_loss_pct=0.18
     )
     option = replace(
         signal.details.option_suggestion,
@@ -597,13 +601,13 @@ def _detect_trend_continuation(
 
     strong_trend_up = (
         trend == "bullish"
-        and bullish_score >= 3
+        and bullish_score >= 2
         and volatility_ok
         and (analysis["rsi"] is None or float(analysis["rsi"]) < OVERBOUGHT_RSI)
     )
     strong_trend_down = (
         trend == "bearish"
-        and bearish_score >= 3
+        and bearish_score >= 2
         and volatility_ok
         and (analysis["rsi"] is None or float(analysis["rsi"]) > OVERSOLD_RSI)
     )
@@ -707,3 +711,5 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return "NA"
     return f"{value:.2f}"
+
+
