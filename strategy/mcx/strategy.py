@@ -12,11 +12,11 @@ logger = logging.getLogger(__name__)
 BREAKOUT_BUFFER_POINTS = 1.2
 MIN_RANGE_POINTS = 4.0
 MIN_BODY_RATIO = 0.15
-MIN_BREAKOUT_STRENGTH_PCT = 0.10
+MIN_BREAKOUT_STRENGTH_PCT = 0.13
 MIN_TARGET_POINTS = 6.0
 MAX_TARGET_POINTS = 18.0
-SCORING_THRESHOLD_NORMAL = 50
-SCORING_THRESHOLD_STRONG = 70
+SCORING_THRESHOLD_NORMAL = 56
+SCORING_THRESHOLD_STRONG = 74
 CRUDEOIL_MICRO_BREAKOUT_PCT = 0.0010
 CRUDEOIL_DEAD_RANGE_POINTS = 1.75
 
@@ -186,6 +186,7 @@ def _detect_mcx_trend(block: MCXMarketBlock) -> str:
 
     tuning = _mcx_tuning(block.symbol, block.timeframe_minutes)
     dead_range = max(tuning["dead_range"], block.average_range * 0.55, block.atr * 0.25)
+    ema_buffer = max(block.atr * 0.08, block.average_range * 0.08, 0.5)
     if (
         block.current_range <= dead_range
         and abs(block.trend_slope_pct) <= 0.03
@@ -194,13 +195,17 @@ def _detect_mcx_trend(block: MCXMarketBlock) -> str:
         return "Sideways"
 
     if block.ema_fast > block.ema_slow:
+        if block.close < block.ema_fast - ema_buffer and block.trend_slope_pct < 0.04:
+            return "Sideways"
         return "Bullish"
     if block.ema_fast < block.ema_slow:
+        if block.close > block.ema_fast + ema_buffer and block.trend_slope_pct > -0.04:
+            return "Sideways"
         return "Bearish"
 
-    if block.close >= block.ema_fast and block.trend_slope_pct >= -tuning["ema_gap_floor"]:
+    if block.close >= block.ema_fast - ema_buffer and block.trend_slope_pct >= -tuning["ema_gap_floor"]:
         return "Bullish"
-    if block.close <= block.ema_fast and block.trend_slope_pct <= tuning["ema_gap_floor"]:
+    if block.close <= block.ema_fast + ema_buffer and block.trend_slope_pct <= tuning["ema_gap_floor"]:
         return "Bearish"
     if block.trend_slope_pct > 0.05:
         return "Bullish"
@@ -295,25 +300,68 @@ def _decide_mcx_entry(
     if filter_score < SCORING_THRESHOLD_NORMAL:
         return "NO_TRADE"
 
-    bullish_bias = trend == "Bullish" or breakout.breakout_type == "BULLISH"
-    bearish_bias = trend == "Bearish" or breakout.breakout_type == "BEARISH"
-    momentum_override = breakout.momentum_ok or breakout.pullback_continuation
+    ema_tolerance = max(block.atr * 0.08, block.average_range * 0.08, 0.6)
+    bullish_bias = trend == "Bullish" and (
+        block.ema_fast is None or block.close >= block.ema_fast - ema_tolerance
+    )
+    bearish_bias = trend == "Bearish" and (
+        block.ema_fast is None or block.close <= block.ema_fast + ema_tolerance
+    )
+    strong_override = (
+        breakout.strong_breakout
+        and breakout.momentum_ok
+        and filter_score >= SCORING_THRESHOLD_STRONG
+        and (
+            (breakout.breakout_type == "BULLISH" and bullish_bias)
+            or (breakout.breakout_type == "BEARISH" and bearish_bias)
+        )
+    )
+    moderate_override = (
+        breakout.micro_breakout
+        and breakout.momentum_ok
+        and filter_score >= (SCORING_THRESHOLD_NORMAL + 12)
+        and (
+            (breakout.breakout_type == "BULLISH" and bullish_bias)
+            or (breakout.breakout_type == "BEARISH" and bearish_bias)
+        )
+    )
 
-    if breakout.breakout_type == "BULLISH" and (bullish_bias or momentum_override):
+    if breakout.breakout_type == "BULLISH" and (
+        bullish_bias and trend != "Bearish"
+    ):
         return "BUY"
-    if breakout.breakout_type == "BEARISH" and (bearish_bias or momentum_override):
+    if breakout.breakout_type == "BEARISH" and (
+        bearish_bias and trend != "Bullish"
+    ):
         return "SELL"
 
-    if breakout.pullback_continuation and trend == "Bullish":
+    if (
+        breakout.breakout_type == "BULLISH"
+        and trend != "Bearish"
+        and (strong_override or moderate_override)
+    ):
         return "BUY"
-    if breakout.pullback_continuation and trend == "Bearish":
+    if (
+        breakout.breakout_type == "BEARISH"
+        and trend != "Bullish"
+        and (strong_override or moderate_override)
+    ):
         return "SELL"
 
-    if trend == "Sideways" and breakout.strong_breakout and breakout.momentum_ok:
-        return "BUY" if breakout.breakout_type == "BULLISH" else "SELL" if breakout.breakout_type == "BEARISH" else "NO_TRADE"
-
-    if breakout.micro_breakout and breakout.momentum_ok and filter_score >= SCORING_THRESHOLD_NORMAL:
-        return "BUY" if breakout.breakout_type == "BULLISH" else "SELL" if breakout.breakout_type == "BEARISH" else "NO_TRADE"
+    if (
+        breakout.pullback_continuation
+        and trend == "Bullish"
+        and filter_score >= SCORING_THRESHOLD_NORMAL + 6
+        and bullish_bias
+    ):
+        return "BUY"
+    if (
+        breakout.pullback_continuation
+        and trend == "Bearish"
+        and filter_score >= SCORING_THRESHOLD_NORMAL + 6
+        and bearish_bias
+    ):
+        return "SELL"
 
     return "NO_TRADE"
 
@@ -401,6 +449,13 @@ def _apply_mcx_filters(
         if breakout.candle_confirmation:
             breakout_score += 4
 
+    if trend == "Bullish" and breakout.breakout_type == "BEARISH":
+        breakout_score = max(breakout_score - (5 if breakout.strong_breakout else 9), 0)
+    elif trend == "Bearish" and breakout.breakout_type == "BULLISH":
+        breakout_score = max(breakout_score - (5 if breakout.strong_breakout else 9), 0)
+    elif trend == "Sideways" and breakout.breakout_type != "NONE" and not breakout.strong_breakout:
+        breakout_score = max(breakout_score - 4, 0)
+
     momentum_score = 0
     if breakout.momentum_ok:
         momentum_score = 25
@@ -410,14 +465,21 @@ def _apply_mcx_filters(
         momentum_score = 8
 
     ema_score = 0
-    if trend == "Bullish" and (block.ema_fast is not None and block.close >= block.ema_fast):
-        ema_score = 20
-    elif trend == "Bearish" and (block.ema_fast is not None and block.close <= block.ema_fast):
-        ema_score = 20
+    ema_tolerance = max(block.atr * 0.12, block.average_range * 0.10, 0.8)
+    if trend == "Bullish":
+        if block.ema_fast is not None and block.close >= block.ema_fast:
+            ema_score = 20
+        elif breakout.strong_breakout and block.ema_fast is not None and block.close >= block.ema_fast - ema_tolerance and block.trend_slope_pct > 0:
+            ema_score = 10
+    elif trend == "Bearish":
+        if block.ema_fast is not None and block.close <= block.ema_fast:
+            ema_score = 20
+        elif breakout.strong_breakout and block.ema_fast is not None and block.close <= block.ema_fast + ema_tolerance and block.trend_slope_pct < 0:
+            ema_score = 10
     elif trend == "Sideways" and breakout.breakout_type != "NONE":
-        ema_score = 10 if block.ema_gap_pct <= tuning["ema_gap_floor"] * 1.5 else 5
-    elif block.ema_gap_pct <= tuning["ema_gap_floor"] * 1.2:
-        ema_score = 12
+        ema_score = 8 if breakout.strong_breakout and block.ema_gap_pct <= tuning["ema_gap_floor"] * 1.2 else 4
+    elif breakout.strong_breakout and block.ema_gap_pct <= tuning["ema_gap_floor"]:
+        ema_score = 8
 
     pullback_score = 15 if breakout.pullback_continuation else 0
     range_score = 10 if breakout.range_expansion_ok else 0

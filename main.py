@@ -1056,6 +1056,7 @@ def _parse_reason_details(reason: str) -> dict[str, str]:
         "range_expansion_missing": ("Range weak", "Range expansion was missing"),
         "low_score": ("Setup weak", "Setup score was too weak"),
         "trend_misaligned": ("Trend blocked", "Trend and entry were misaligned"),
+        "ema_misaligned": ("EMA blocked", "Price was too far from the fast EMA"),
         "weak_candle": ("Weak candle", "Candle body was too small for entry"),
         "low_volatility": ("Low volatility", "Market range was too narrow"),
         "weak_breakout": ("Weak breakout", "Breakout was too weak"),
